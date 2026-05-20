@@ -1,14 +1,29 @@
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { DarajaService } from './services/daraja/darajaService';
+import { resolveConfig, getAccessToken } from './services/daraja/darajaClient';
 import { validateWebhookToken, checkIdempotency, logRawPayload } from './services/daraja/webhookValidator';
+import { initiateBusinessBuyGoods } from './services/businessBuyGoods/initiateBusinessBuyGoods';
+import { handleBusinessBuyGoodsResult } from './services/businessBuyGoods/handleBusinessBuyGoodsResult';
+import { handleBusinessBuyGoodsTimeout } from './services/businessBuyGoods/handleBusinessBuyGoodsTimeout';
 
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// Custom CORS Middleware
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
@@ -22,11 +37,117 @@ app.get('/api/health', (req, res) => {
 });
 
 /**
+ * Daraja Connection Test Endpoint
+ * POST /api/mpesa/test-connection
+ */
+app.post('/api/mpesa/test-connection', async (req, res) => {
+  const { action, payload } = req.body;
+  const start = Date.now();
+  try {
+    const config = await resolveConfig();
+    let result: any = null;
+
+    if (action === 'oauth') {
+      const token = await getAccessToken(config);
+      result = {
+        access_token: token.substring(0, 8) + '...' + token.substring(token.length - 8),
+        expires_in: 3599
+      };
+    } else if (action === 'stkpush') {
+      const phone = payload?.phone || '254708374149';
+      const amount = Number(payload?.amount) || 10;
+      const ref = payload?.reference || 'TEST-' + Math.floor(Math.random() * 10000);
+      result = await DarajaService.initiateSTKPush(phone, amount, ref, 'Test STK Push');
+    } else if (action === 'balance') {
+      result = await DarajaService.queryAccountBalance({
+        Initiator: config.initiatorName || 'api_user',
+        SecurityCredential: config.securityCredential || 'credential',
+        PartyA: config.shortCode || '174379',
+        ResultURL: config.callbackUrl,
+        QueueTimeOutURL: config.callbackUrl,
+        Remarks: 'Test Account Balance'
+      });
+    } else if (action === 'status') {
+      const transactionId = payload?.transactionId || 'OHT1234567';
+      result = await DarajaService.queryTransactionStatus({
+        Initiator: config.initiatorName || 'api_user',
+        SecurityCredential: config.securityCredential || 'credential',
+        TransactionID: transactionId,
+        PartyA: config.shortCode || '174379',
+        IdentifierType: '4',
+        ResultURL: config.callbackUrl,
+        QueueTimeOutURL: config.callbackUrl,
+        Remarks: 'Test Transaction Status'
+      });
+    } else if (action === 'b2c') {
+      const phone = payload?.phone || '254708374149';
+      const amount = Number(payload?.amount) || 10;
+      result = await DarajaService.requestB2C({
+        CommandID: 'BusinessPayment',
+        Amount: amount,
+        PartyB: phone,
+        Remarks: 'Test B2C',
+        QueueTimeOutURL: config.callbackUrl,
+        ResultURL: config.callbackUrl
+      });
+    } else if (action === 'reversal') {
+      const transactionId = payload?.transactionId || 'OHT1234567';
+      const amount = Number(payload?.amount) || 10;
+      result = await DarajaService.requestReversal({
+        Initiator: config.initiatorName || 'api_user',
+        SecurityCredential: config.securityCredential || 'credential',
+        TransactionID: transactionId,
+        Amount: amount,
+        ReceiverParty: config.shortCode || '174379',
+        RecieverIdentifierType: '4',
+        ResultURL: config.callbackUrl,
+        QueueTimeOutURL: config.callbackUrl,
+        Remarks: 'Test Reversal'
+      });
+    } else if (action === 'b2b_buy_goods') {
+      const till = payload?.till || '174379';
+      const amount = Number(payload?.amount) || 10;
+      result = await initiateBusinessBuyGoods({
+        receiverTill: till,
+        amount,
+        accountReference: payload?.reference || 'TEST-B2B',
+        remarks: payload?.remarks || 'Test B2B Buy Goods Payout',
+        confirmationPassword: payload?.password,
+        userId: payload?.userId
+      });
+    } else {
+      return res.status(400).json({ error: 'Unknown test action' });
+    }
+
+    const latency = Date.now() - start;
+    return res.json({
+      success: true,
+      action,
+      environment: config.env,
+      timestamp: new Date().toISOString(),
+      latency,
+      payload: result
+    });
+  } catch (err: any) {
+    const latency = Date.now() - start;
+    console.error(`[Test Connection Error] Action: ${action}`, err);
+    return res.status(500).json({
+      success: false,
+      action,
+      environment: 'sandbox',
+      timestamp: new Date().toISOString(),
+      latency,
+      error: err.message
+    });
+  }
+});
+
+/**
  * 7. STK PUSH (Initiation Request)
  * POST /api/mpesa/stkpush
  */
 app.post('/api/mpesa/stkpush', async (req, res) => {
-  const { phone, amount, reference, description } = req.body;
+  const { phone, amount, reference, description, paymentLinkId } = req.body;
 
   if (!phone || !amount || !reference) {
     return res.status(400).json({ error: 'Missing phone, amount, or reference parameter.' });
@@ -59,6 +180,7 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
         merchant_request_id: MerchantRequestID,
         result_code: ResponseCode,
         result_desc: ResponseDescription,
+        payment_link_id: paymentLinkId || null,
         occurred_at: new Date().toISOString()
       })
       .select()
@@ -312,7 +434,9 @@ app.post('/api/mpesa/confirm', async (req, res) => {
       customerId = customer.id;
     }
 
-    // 3. Create Completed Transaction
+    const txStatus = customerId ? 'completed' : 'orphaned';
+
+    // 3. Create Completed or Orphaned Transaction
     const { data: trx, error: txError } = await supabase
       .from('transactions')
       .insert({
@@ -325,7 +449,7 @@ app.post('/api/mpesa/confirm', async (req, res) => {
         account_reference: BillRefNumber || 'N/A',
         phone_number: MSISDN,
         customer_id: customerId,
-        status: 'completed',
+        status: txStatus,
         occurred_at: new Date().toISOString()
       })
       .select()
@@ -336,24 +460,26 @@ app.post('/api/mpesa/confirm', async (req, res) => {
     // 4. Save raw event payload
     await logRawPayload(trx.id, 'C2B_CONFIRMATION', req.body, 'mpesa_c2b_webhook');
 
-    // 5. Double-Entry Ledger rows
-    const { error: ledgerError } = await supabase.from('ledger_entries').insert([
-      {
-        transaction_id: trx.id,
-        account_id: 'a1111111-1111-1111-1111-111111111111', // Paybill Collection Main
-        entry_type: 'DEBIT',
-        amount: trx.amount
-      },
-      {
-        transaction_id: trx.id,
-        account_id: 'a3333333-3333-3333-3333-333333333333', // Disbursements Vault
-        entry_type: 'CREDIT',
-        amount: trx.amount
-      }
-    ]);
+    // 5. Double-Entry Ledger rows (only if successfully completed/reconciled)
+    if (txStatus === 'completed') {
+      const { error: ledgerError } = await supabase.from('ledger_entries').insert([
+        {
+          transaction_id: trx.id,
+          account_id: 'a1111111-1111-1111-1111-111111111111', // Paybill Collection Main
+          entry_type: 'DEBIT',
+          amount: trx.amount
+        },
+        {
+          transaction_id: trx.id,
+          account_id: 'a3333333-3333-3333-3333-333333333333', // Disbursements Vault
+          entry_type: 'CREDIT',
+          amount: trx.amount
+        }
+      ]);
 
-    if (ledgerError) {
-      console.error('[Ledger Error] Failed to write C2B double entry rows:', ledgerError);
+      if (ledgerError) {
+        console.error('[Ledger Error] Failed to write C2B double entry rows:', ledgerError);
+      }
     }
 
     // 6. Write Audit logs
@@ -601,6 +727,153 @@ app.post('/api/mpesa/billmanager/:action', async (req, res) => {
   } catch (err: any) {
     console.error(`[Bill Manager ${action} Error]`, err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * M-PESA B2B BUSINESS BUY GOODS APIs
+ */
+
+// 12. Initiate B2B Merchant Payment
+app.post('/api/business-buy-goods', async (req, res) => {
+  const { receiverTill, amount, accountReference, remarks, occasion, requesterPhone, confirmationPassword, userId } = req.body;
+
+  if (!receiverTill || !amount || !accountReference || !remarks) {
+    return res.status(400).json({ error: 'Missing receiverTill, amount, accountReference, or remarks parameter.' });
+  }
+
+  try {
+    const result = await initiateBusinessBuyGoods({
+      receiverTill,
+      amount: Number(amount),
+      accountReference,
+      remarks,
+      occasion,
+      requesterPhone,
+      confirmationPassword,
+      userId
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[B2B Payout API Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
+// 13. Retry B2B Merchant Payment
+app.post('/api/business-buy-goods/retry', async (req, res) => {
+  const { transactionId, confirmationPassword, userId } = req.body;
+
+  if (!transactionId) {
+    return res.status(400).json({ error: 'Missing transactionId parameter.' });
+  }
+
+  try {
+    // 1. Retrieve the existing transaction
+    const { data: trx, error: fetchError } = await supabase
+      .from('business_buy_goods_transactions')
+      .select('*')
+      .eq('id', transactionId)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!trx) {
+      return res.status(444).json({ error: 'Transaction not found.' });
+    }
+
+    // 2. Safety: Only failed/timeout transactions can be retried
+    if (trx.status !== 'failed' && trx.status !== 'timeout') {
+      return res.status(400).json({ error: `Cannot retry transaction with status: ${trx.status}. Only failed or timed out transactions can be retried.` });
+    }
+
+    // 3. Initiate the payout as a retry
+    const result = await initiateBusinessBuyGoods({
+      receiverTill: trx.receiver_till,
+      amount: Number(trx.amount),
+      accountReference: trx.account_reference,
+      remarks: trx.remarks,
+      occasion: trx.occasion,
+      requesterPhone: trx.requester_phone,
+      confirmationPassword,
+      userId: userId || trx.created_by,
+      parentTransactionId: trx.id
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[B2B Payout Retry Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
+// 14. B2B Webhook Result Callback
+app.post('/api/webhooks/business-buy-goods/result', async (req, res) => {
+  const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+  console.log(`[Webhook B2B Result] Received callback from IP: ${clientIp}, Headers:`, req.headers);
+
+  // 1. Verify Webhook Token
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+
+  try {
+    // 2. Fetch transaction using ConversationID in payload to link the log
+    const conversationId = req.body?.Result?.ConversationID;
+    let trxId: string | null = null;
+    if (conversationId) {
+      const { data: trx } = await supabase
+        .from('business_buy_goods_transactions')
+        .select('id')
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+      if (trx) trxId = trx.id;
+    }
+
+    // 3. Enforce raw callback payload storage
+    await logRawPayload(trxId, 'B2B_RESULT_CALLBACK', req.body, 'mpesa_webhook');
+
+    // 4. Handle Result
+    const outcome = await handleBusinessBuyGoodsResult(req.body, clientIp);
+    return res.json({ ResultCode: 0, ResultDesc: 'Success', outcome });
+  } catch (err: any) {
+    console.error('[Webhook B2B Result Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal webhook processing error' });
+  }
+});
+
+// 15. B2B Webhook Timeout Callback
+app.post('/api/webhooks/business-buy-goods/timeout', async (req, res) => {
+  const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+  console.log(`[Webhook B2B Timeout] Received callback from IP: ${clientIp}`);
+
+  // 1. Verify Webhook Token
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+
+  try {
+    // 2. Fetch transaction using ConversationID in payload
+    const conversationId = req.body?.ConversationID || req.body?.Result?.ConversationID;
+    let trxId: string | null = null;
+    if (conversationId) {
+      const { data: trx } = await supabase
+        .from('business_buy_goods_transactions')
+        .select('id')
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+      if (trx) trxId = trx.id;
+    }
+
+    // 3. Log raw timeout payload
+    await logRawPayload(trxId, 'B2B_TIMEOUT_CALLBACK', req.body, 'mpesa_webhook');
+
+    // 4. Handle Timeout
+    const outcome = await handleBusinessBuyGoodsTimeout(req.body, clientIp);
+    return res.json({ ResultCode: 0, ResultDesc: 'Success', outcome });
+  } catch (err: any) {
+    console.error('[Webhook B2B Timeout Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal webhook processing error' });
   }
 });
 

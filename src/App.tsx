@@ -12,6 +12,7 @@ import { AnalyticsPage } from './pages/AnalyticsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { PaymentCheckoutPage } from './pages/PaymentCheckoutPage';
 import { LoginPage } from './pages/LoginPage';
+import { MerchantPaymentsPage } from './pages/MerchantPaymentsPage';
 import { useNavigation } from './components/NavigationContext';
 import { supabase } from './utils/supabaseClient';
 
@@ -54,6 +55,7 @@ export default function App() {
       case 'Transactions': return <TransactionsPage />;
       case 'Paybill Activity': return <PaybillActivityPage />;
       case 'STK Push': return <STKPushPage />;
+      case 'Merchant Payments': return <MerchantPaymentsPage />;
       case 'Payment Checkout': return <PaymentCheckoutPage />;
       case 'Reversals': return <ReversalsPage />;
       case 'Reconciliation': return <ReconciliationPage />;
@@ -63,6 +65,12 @@ export default function App() {
       default: return <Dashboard />;
     }
   };
+
+  const isCheckoutPath = window.location.pathname.includes('/checkout') || window.location.search.includes('slug=') || window.location.search.includes('ref=');
+
+  if (isCheckoutPath) {
+    return <PaymentCheckoutPage />;
+  }
 
   if (isAuthLoading) {
     return (
