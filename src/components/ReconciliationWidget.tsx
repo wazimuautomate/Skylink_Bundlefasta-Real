@@ -1,18 +1,78 @@
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { ArrowUpRight } from 'lucide-react';
+import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTheme } from './ThemeProvider';
+import { useState, useEffect } from 'react';
+import { supabase } from '../utils/supabaseClient';
 
-const data = [
-  { name: 'Reconciled', value: 850000 },
-  { name: 'Unreconciled', value: 125400 },
-];
 const COLORS = ['#00BFFF', '#FF4500'];
 
 export function ReconciliationWidget() {
-  const total = data.reduce((sum, item) => sum + item.value, 0);
-  const unreconciled = data.find(d => d.name === 'Unreconciled')?.value || 0;
-  const mismatchPercent = ((unreconciled / total) * 100).toFixed(1);
+  const [reconciledVolume, setReconciledVolume] = useState(0);
+  const [unreconciledVolume, setUnreconciledVolume] = useState(0);
+  const [loading, setLoading] = useState(true);
   const { theme } = useTheme();
+
+  const fetchVolumes = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('amount, status');
+
+      if (error) throw error;
+
+      let reconciled = 0;
+      let unreconciled = 0;
+
+      (data || []).forEach(tx => {
+        const amt = Number(tx.amount);
+        if (tx.status === 'completed') {
+          reconciled += amt;
+        } else if (['orphaned', 'duplicate', 'delayed', 'pending'].includes(tx.status)) {
+          unreconciled += amt;
+        }
+      });
+
+      setReconciledVolume(reconciled);
+      setUnreconciledVolume(unreconciled);
+    } catch (err) {
+      console.error('Error fetching reconciliation volumes:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchVolumes();
+
+    const channel = supabase
+      .channel('reconciliation-widget-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        fetchVolumes();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const data = [
+    { name: 'Reconciled', value: reconciledVolume },
+    { name: 'Unreconciled', value: unreconciledVolume },
+  ];
+
+  const total = reconciledVolume + unreconciledVolume;
+  const mismatchPercent = total > 0 ? ((unreconciledVolume / total) * 100).toFixed(1) : '0.0';
+
+  if (loading) {
+    return (
+      <div className="bg-brand-panel border border-brand-border shadow-sm rounded-2xl p-6 h-full flex flex-col justify-center items-center relative overflow-hidden min-h-[300px]">
+        <RefreshCw size={24} className="text-brand-accent animate-spin mb-2" />
+        <span className="text-sm text-brand-text/50">Calculating ratios...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-brand-panel border border-brand-border shadow-sm rounded-2xl p-6 h-full flex flex-col relative overflow-hidden transition-colors duration-300">
@@ -22,14 +82,18 @@ export function ReconciliationWidget() {
       <div className="flex justify-between items-start mb-6">
         <div>
           <h3 className="text-lg font-bold text-brand-text">Reconciliation</h3>
-          <p className="text-sm text-brand-text/50">Today's Settlement</p>
+          <p className="text-sm text-brand-text/50">Cumulative Vault Volume</p>
         </div>
-        <button className="p-2 border border-brand-border rounded-lg text-brand-text/60 hover:text-brand-accent hover:border-brand-accent/50 transition-colors">
-          <ArrowUpRight size={16} />
+        <button 
+          onClick={fetchVolumes}
+          className="p-2 border border-brand-border rounded-lg text-brand-text/60 hover:text-brand-accent hover:border-brand-accent/50 transition-colors"
+          title="Refresh calculations"
+        >
+          <RefreshCw size={14} />
         </button>
       </div>
 
-      <div className="flex-1 flex flex-col justify-center relative min-h-[220px]">
+      <div className="flex-1 flex flex-col justify-center relative min-h-[200px]">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -65,7 +129,7 @@ export function ReconciliationWidget() {
         </div>
       </div>
 
-      <div className="space-y-3 mt-2">
+      <div className="space-y-3 mt-4">
         {data.map((item, idx) => (
           <div key={idx} className="flex justify-between items-center text-sm">
             <div className="flex items-center gap-2">
