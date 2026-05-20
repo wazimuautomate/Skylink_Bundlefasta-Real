@@ -11,7 +11,8 @@ import {
   Settings,
   LogOut,
   X,
-  Coins
+  Coins,
+  UserCheck
 } from 'lucide-react';
 import { useLayout } from './LayoutContext';
 import { useNavigation } from './NavigationContext';
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { name: 'STK Push', icon: Smartphone },
   { name: 'Merchant Payments', icon: Store },
   { name: 'Treasury', icon: Coins },
+  { name: 'Business To Pochi', icon: UserCheck },
   { name: 'Reversals', icon: RotateCcw },
   { name: 'Reconciliation', icon: FileCheck2 },
   { name: 'Customers', icon: Users },

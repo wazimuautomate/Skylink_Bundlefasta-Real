@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0-business-to-pochi] - 2026-05-20
+### Added
+- Implemented production-grade Safaricom Daraja **Business to Pochi** payout module on dedicated branch `feature/api-business-to-pochi`.
+- Business to Pochi is implemented as a B2C `BusinessPayment` dispatch to a personal MSISDN (Pochi La Biashara wallet), wrapped in enterprise safety controls.
+- Database Schema: Added `business_to_pochi_transactions` and `pochi_audit_logs` tables with strict Row Level Security (RLS) policies, performance indexes, and automatic audit logging via `mpesa_credentials` safety config extensions.
+- Created Backend Service Layer at `src/server/services/businessToPochi/`:
+  - `validateBusinessToPochi.ts`: Multi-layer input validator enforcing per-transaction KES limits, daily disbursement caps, rate-limit cooldown windows (anti-duplicate), phone MSISDN normalization (254-prefix), and optional confirmation password gating — all fetched live from `mpesa_credentials`.
+  - `initiateBusinessToPochi.ts`: Initiates a B2C `BusinessPayment` payout: UUID idempotency reference generation, dynamic Safaricom certificate RSA-PKCS1 initiator password encryption (sandbox cert auto-fetched and cached; production PEM via env), DB record queued → submitted lifecycle, full raw request/response payload storage, and retry counter tracking via `parentTransactionId` linkage.
+  - `parseBusinessToPochiResult.ts`: Webhook callback parser unpacking B2C result parameters: `TransactionID`, `Amount`, `ReceiverPartyPublicName`, `TransactionCompletedDateTime`, `DebitAccountBalance`, `DebitPartyBalance`, `InitiatorBalance` — with date string normalization for Safaricom's dot-separated format.
+  - `handleBusinessToPochiResult.ts`: Webhook result handler with strict idempotency guard (skips already-resolved transactions), writes double-entry CREDIT ledger posting to B2C disbursements vault (`a3333333-3333-3333-3333-333333333333`), atomically decrements account balance via `decrement_account_balance` RPC, mirrors outbound disbursement to the main `transactions` table, writes `pochi_audit_logs` event trail, and pushes in-app success/failure notifications.
+  - `handleBusinessToPochiTimeout.ts`: Queue timeout handler preserving existing resolved status (timeout ≠ failure), recording `timeout_received` flag, logging `pochi_audit_logs`, and dispatching a timeout alert notification.
+- Registered Express routes in `src/server/index.ts`:
+  - `POST /api/business-to-pochi`: Initiates a new Pochi payout with full validation pipeline.
+  - `POST /api/business-to-pochi/retry`: Idempotent retry endpoint for `failed` or `timeout` transactions, linked via `parentTransactionId`.
+  - `POST /api/webhooks/business-to-pochi/result`: Webhook token-validated result callback with raw payload persistence and idempotent outcome handling.
+  - `POST /api/webhooks/business-to-pochi/timeout`: Webhook token-validated queue timeout callback with non-destructive status management.
+- Frontend Dashboard: New full-featured page at `src/pages/BusinessToPochiPage.tsx`:
+  - Secure outbound payout form with MSISDN phone normalization, live safety limit display, optional confirmation password toggle, and a two-step confirmation modal with danger warning.
+  - **Safety Settings Modal**: In-UI control to update per-transaction limit, daily cap, cooldown seconds, and confirmation password directly from `mpesa_credentials`.
+  - **Real-time PostgreSQL subscription** via Supabase channel `pochi-transactions-realtime` for instant table and drawer updates.
+  - **4 KPI Summary Cards**: Paid Today, Pending/Processing, Failed Transactions, Timed Out.
+  - **7-Day Outbound Payout Trend** area chart and **Top 5 Receivers** bar chart using Recharts.
+  - **Payout History Log table**: searchable, filterable by status, with inline status badges.
+  - **Transaction Detail Drawer**: M-Pesa receipt ID, registered receiver name, account balances, retry button (failed/timeout only), chronological webhook audit timeline, and raw payload JSON inspector (request, response, callback tabs).
+- Navigation wired: `src/App.tsx` route case `'Business To Pochi'` and `src/components/Sidebar.tsx` nav item with `UserCheck` icon inserted after Treasury.
+
 ## [1.5.0-reversal-improvements] - 2026-05-20
 ### Added
 - Enhanced Reversal API to handle asynchronous Daraja callbacks, verify original transactions, and flip double-entry ledger entries.

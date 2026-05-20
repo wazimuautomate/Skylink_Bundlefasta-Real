@@ -14,6 +14,7 @@ import { PaymentCheckoutPage } from './pages/PaymentCheckoutPage';
 import { LoginPage } from './pages/LoginPage';
 import { MerchantPaymentsPage } from './pages/MerchantPaymentsPage';
 import { TreasuryTopupPage } from './pages/TreasuryTopupPage';
+import { BusinessToPochiPage } from './pages/BusinessToPochiPage';
 import { useNavigation } from './components/NavigationContext';
 import { supabase } from './utils/supabaseClient';
 
@@ -58,6 +59,7 @@ export default function App() {
       case 'STK Push': return <STKPushPage />;
       case 'Merchant Payments': return <MerchantPaymentsPage />;
       case 'Treasury': return <TreasuryTopupPage />;
+      case 'Business To Pochi': return <BusinessToPochiPage />;
       case 'Payment Checkout': return <PaymentCheckoutPage />;
       case 'Reversals': return <ReversalsPage />;
       case 'Reconciliation': return <ReconciliationPage />;

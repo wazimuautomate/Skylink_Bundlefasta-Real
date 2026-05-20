@@ -20,6 +20,9 @@ import { handleAccountBalanceTimeout } from './services/accountBalance/handleAcc
 import { initiateReversal } from './services/reversal/initiateReversal';
 import { handleReversalResult } from './services/reversal/handleReversalResult';
 import { handleReversalTimeout } from './services/reversal/handleReversalTimeout';
+import { initiateBusinessToPochi } from './services/businessToPochi/initiateBusinessToPochi';
+import { handleBusinessToPochiResult } from './services/businessToPochi/handleBusinessToPochiResult';
+import { handleBusinessToPochiTimeout } from './services/businessToPochi/handleBusinessToPochiTimeout';
 
 dotenv.config();
 
@@ -1105,6 +1108,135 @@ app.post('/api/webhooks/b2c-topup/timeout', async (req, res) => {
     return res.json({ ResultCode: 0, ResultDesc: 'Success', outcome });
   } catch (err: any) {
     console.error('[Webhook B2C Topup Timeout Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal webhook processing error' });
+  }
+});
+
+// 21. Business to Pochi endpoints
+app.post('/api/business-to-pochi', async (req, res) => {
+  const { receiverPhone, amount, accountReference, remarks, occasion, requesterPhone, confirmationPassword, userId } = req.body;
+
+  if (!receiverPhone || !amount || !accountReference || !remarks) {
+    return res.status(400).json({ error: 'Missing receiverPhone, amount, accountReference, or remarks parameter.' });
+  }
+
+  try {
+    const result = await initiateBusinessToPochi({
+      receiverPhone,
+      amount: Number(amount),
+      accountReference,
+      remarks,
+      occasion,
+      requesterPhone,
+      confirmationPassword,
+      userId
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Pochi Payout API Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
+app.post('/api/business-to-pochi/retry', async (req, res) => {
+  const { transactionId, confirmationPassword, userId } = req.body;
+
+  if (!transactionId) {
+    return res.status(400).json({ error: 'Missing transactionId parameter.' });
+  }
+
+  try {
+    const { data: trx, error: fetchError } = await supabase
+      .from('business_to_pochi_transactions')
+      .select('*')
+      .eq('id', transactionId)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!trx) {
+      return res.status(444).json({ error: 'Transaction not found.' });
+    }
+
+    if (trx.status !== 'failed' && trx.status !== 'timeout') {
+      return res.status(400).json({ error: `Cannot retry transaction with status: ${trx.status}.` });
+    }
+
+    const result = await initiateBusinessToPochi({
+      receiverPhone: trx.receiver_phone,
+      amount: Number(trx.amount),
+      accountReference: trx.account_reference,
+      remarks: trx.remarks,
+      occasion: trx.occasion,
+      requesterPhone: trx.requester_phone,
+      confirmationPassword,
+      userId: userId || trx.created_by,
+      parentTransactionId: trx.id
+    });
+
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[Pochi Payout Retry Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
+app.post('/api/webhooks/business-to-pochi/result', async (req, res) => {
+  const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+  console.log(`[Webhook Pochi Result] Received callback from IP: ${clientIp}`);
+
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+
+  try {
+    const conversationId = req.body?.Result?.ConversationID;
+    let trxId: string | null = null;
+    if (conversationId) {
+      const { data: trx } = await supabase
+        .from('business_to_pochi_transactions')
+        .select('id')
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+      if (trx) trxId = trx.id;
+    }
+
+    await logRawPayload(trxId, 'POCHI_RESULT_CALLBACK', req.body, 'mpesa_webhook');
+
+    const outcome = await handleBusinessToPochiResult(req.body, clientIp);
+    return res.json({ ResultCode: 0, ResultDesc: 'Success', outcome });
+  } catch (err: any) {
+    console.error('[Webhook Pochi Result Error]', err);
+    return res.status(500).json({ error: err.message || 'Internal webhook processing error' });
+  }
+});
+
+app.post('/api/webhooks/business-to-pochi/timeout', async (req, res) => {
+  const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+  console.log(`[Webhook Pochi Timeout] Received callback from IP: ${clientIp}`);
+
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+
+  try {
+    const conversationId = req.body?.ConversationID || req.body?.Result?.ConversationID;
+    let trxId: string | null = null;
+    if (conversationId) {
+      const { data: trx } = await supabase
+        .from('business_to_pochi_transactions')
+        .select('id')
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+      if (trx) trxId = trx.id;
+    }
+
+    await logRawPayload(trxId, 'POCHI_TIMEOUT_CALLBACK', req.body, 'mpesa_webhook');
+
+    const outcome = await handleBusinessToPochiTimeout(req.body, clientIp);
+    return res.json({ ResultCode: 0, ResultDesc: 'Success', outcome });
+  } catch (err: any) {
+    console.error('[Webhook Pochi Timeout Error]', err);
     return res.status(500).json({ error: err.message || 'Internal webhook processing error' });
   }
 });
