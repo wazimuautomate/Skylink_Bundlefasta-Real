@@ -1,0 +1,68 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-brand-bg: var(--bg);
+  --color-brand-panel: var(--panel);
+  --color-brand-text: var(--text);
+  --color-brand-border: var(--border);
+  
+  --color-brand-accent: var(--accent);
+  --color-status-success: var(--success);
+  --color-status-danger: var(--danger);
+  --color-status-warning: var(--warning);
+  --color-brand-muted: var(--muted);
+  
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --bg: #F4F7FA;
+  --panel: #FFFFFF;
+  --text: #111827;
+  --border: #E5E7EB;
+  
+  --accent: #00BFFF;
+  --success: #0DB02B;
+  --danger: #E60000;
+  --warning: #FF4500;
+  --muted: #6B7280;
+}
+
+:root.dark {
+  --bg: #222222;
+  --panel: #2A2A2A;
+  --text: #ffffff;
+  --border: #3A3A3A;
+  
+  --accent: #00BFFF;
+  --success: #0DB02B;
+  --danger: #E60000;
+  --warning: #FF4500;
+  --muted: #B0BEC5;
+}
+
+body {
+  background-color: var(--color-brand-bg);
+  color: var(--color-brand-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Custom scrollbar for webkit */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--border); 
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 191, 255, 0.4); 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 191, 255, 0.7); 
+}
