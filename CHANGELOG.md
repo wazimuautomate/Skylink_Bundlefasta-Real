@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0-account-balance] - 2026-05-20
+### Added
+- Implemented production-grade Safaricom Daraja Account Balance Query API module on dedicated branch `feature/api-account-balance`.
+- Database Schema: Added `account_balance_queries` table in Supabase with strict Row Level Security (RLS) policies, performance indexes, and automatic audit logging.
+- Created Backend Service Layer at `src/server/services/accountBalance/`:
+  - `initiateAccountBalance.ts`: Initiator password encryption using Safaricom's public certificate, state tracking, and Daraja account balance API dispatching.
+  - `parseAccountBalanceResult.ts`: Webhook callback unpacker parsing the complex pipe-separated and ampersand-separated Safaricom balance string into structured utility/working/charges/settlement balances.
+  - `handleAccountBalanceResult.ts`: Webhook result handler updating internal ledger balances in the `accounts` table: mapping Working Account to Paybill Collection Main (`a1111111-1111-1111-1111-111111111111`) and Utility Account to Disbursements Vault (`a3333333-3333-3333-3333-333333333333`), logging balance sync audits, and sending dashboard notifications.
+  - `handleAccountBalanceTimeout.ts`: Queue timeout handler marking query log status as timeout and alerting administrators.
+- Registered Express routes in `src/server/index.ts`:
+  - `POST /api/mpesa/account/balance`: Stateful balance query initiator.
+  - `POST /api/webhooks/account-balance/result`: Webhook result callback endpoint.
+  - `POST /api/webhooks/account-balance/timeout`: Webhook queue timeout callback endpoint.
+- Frontend Dashboard: Integrated "Safaricom Balance Sync" tab inside `src/pages/TreasuryTopupPage.tsx` featuring:
+  - Button to manual sync/query account balances with optional remarks.
+  - Real-time PostgreSQL subscription updates for query log state changes.
+  - Interactive "Inspect Payloads" modal dialog displaying the raw JSON payload inspector (request, response, and webhook callback) and displaying parsed working/utility balances.
+
 ## [1.3.0-transaction-status] - 2026-05-20
 ### Added
 - Implemented production-grade Safaricom Daraja Transaction Status Query API module on dedicated branch `feature/api-transaction-status`.

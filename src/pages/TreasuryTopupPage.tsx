@@ -118,6 +118,14 @@ export function TreasuryTopupPage() {
   // Connection diagnostics
   const [connectionCheck, setConnectionCheck] = useState<{ status: 'idle' | 'checking' | 'connected' | 'error', message?: string }>({ status: 'idle' });
 
+  // Account Balance Query State
+  const [activeSubTab, setActiveSubTab] = useState<'history' | 'balanceSync'>('history');
+  const [balanceQueries, setBalanceQueries] = useState<any[]>([]);
+  const [balanceQueryRemarks, setBalanceQueryRemarks] = useState('');
+  const [balanceQuerySubmitting, setBalanceQuerySubmitting] = useState(false);
+  const [selectedBalanceQuery, setSelectedBalanceQuery] = useState<any>(null);
+  const [isBalanceQueryModalOpen, setIsBalanceQueryModalOpen] = useState(false);
+
   // Load user session
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -196,11 +204,59 @@ export function TreasuryTopupPage() {
     }
   };
 
+  const fetchBalanceQueries = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('account_balance_queries')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+      setBalanceQueries(data || []);
+    } catch (err) {
+      console.error('Failed to fetch balance queries:', err);
+    }
+  };
+
+  const handleTriggerBalanceQuery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBalanceQuerySubmitting(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const response = await fetch('/api/mpesa/account/balance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          userId: userData?.user?.id,
+          remarks: balanceQueryRemarks || undefined
+        })
+      });
+
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to sync balance.');
+      }
+
+      alert(`Balance sync query dispatched! Conversation ID: ${responseData.ConversationID || 'Generated'}`);
+      setBalanceQueryRemarks('');
+      fetchBalanceQueries();
+    } catch (err: any) {
+      console.error(err);
+      alert(`Error syncing balance: ${err.message}`);
+    } finally {
+      setBalanceQuerySubmitting(false);
+    }
+  };
+
   // Setup realtime listener
   useEffect(() => {
     fetchBalances();
     fetchSafetyConfig();
     fetchTransactions();
+    fetchBalanceQueries();
 
     const channel = supabase
       .channel('b2c-topups-realtime')
@@ -220,6 +276,21 @@ export function TreasuryTopupPage() {
                 if (data) setSelectedTx({ ...data, amount: Number(data.amount) });
               });
           }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'account_balance_queries' },
+        () => {
+          fetchBalances();
+          fetchBalanceQueries();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'accounts' },
+        () => {
+          fetchBalances();
         }
       )
       .subscribe();
@@ -860,117 +931,227 @@ export function TreasuryTopupPage() {
         </div>
       </div>
 
-      {/* TRANSACTION REGISTRY TABLE */}
+      {/* TRANSACTION REGISTRY CONTAINER */}
       <div className="bg-brand-panel border border-brand-border rounded-2xl overflow-hidden">
         {/* Table controls */}
         <div className="p-6 border-b border-brand-border/50 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <h3 className="text-lg font-semibold text-brand-text">Top Up History</h3>
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Search Input */}
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 text-brand-text/45 w-4 h-4" />
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => setActiveSubTab('history')}
+              className={`text-lg font-semibold transition cursor-pointer pb-1 border-b-2 ${
+                activeSubTab === 'history'
+                  ? 'text-brand-text border-brand-accent'
+                  : 'text-brand-text/50 border-transparent hover:text-brand-text'
+              }`}
+            >
+              Top Up History
+            </button>
+            <button
+              onClick={() => setActiveSubTab('balanceSync')}
+              className={`text-lg font-semibold transition cursor-pointer pb-1 border-b-2 ${
+                activeSubTab === 'balanceSync'
+                  ? 'text-brand-text border-brand-accent'
+                  : 'text-brand-text/50 border-transparent hover:text-brand-text'
+              }`}
+            >
+              Safaricom Balance Sync
+            </button>
+          </div>
+
+          {activeSubTab === 'history' ? (
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Search Input */}
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 text-brand-text/45 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder="Search history..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 pr-4 py-2 w-64 rounded-xl bg-brand-bg border border-brand-border focus:border-brand-accent text-brand-text text-sm outline-none transition"
+                />
+              </div>
+              {/* Status Filter */}
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-brand-bg border border-brand-border text-brand-text text-sm outline-none cursor-pointer"
+              >
+                <option value="All">All Statuses</option>
+                <option value="Queued">Queued</option>
+                <option value="Submitted">Submitted</option>
+                <option value="Processing">Processing</option>
+                <option value="Success">Success</option>
+                <option value="Failed">Failed</option>
+                <option value="Timeout">Timeout</option>
+              </select>
+            </div>
+          ) : (
+            <form onSubmit={handleTriggerBalanceQuery} className="flex items-center gap-3 w-full md:w-auto">
               <input
                 type="text"
-                placeholder="Search history..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 pr-4 py-2 w-64 rounded-xl bg-brand-bg border border-brand-border focus:border-brand-accent text-brand-text text-sm outline-none transition"
+                placeholder="Optional remarks (e.g. Weekly Audit)..."
+                value={balanceQueryRemarks}
+                onChange={(e) => setBalanceQueryRemarks(e.target.value)}
+                className="px-4 py-2 rounded-xl bg-brand-bg border border-brand-border focus:border-brand-accent text-brand-text text-sm outline-none transition w-full md:w-64"
               />
-            </div>
-            {/* Status Filter */}
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-brand-bg border border-brand-border text-brand-text text-sm outline-none cursor-pointer"
-            >
-              <option value="All">All Statuses</option>
-              <option value="Queued">Queued</option>
-              <option value="Submitted">Submitted</option>
-              <option value="Processing">Processing</option>
-              <option value="Success">Success</option>
-              <option value="Failed">Failed</option>
-              <option value="Timeout">Timeout</option>
-            </select>
-          </div>
+              <button
+                type="submit"
+                disabled={balanceQuerySubmitting}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-accent hover:bg-brand-accent/90 disabled:bg-brand-accent/50 text-brand-bg text-sm font-semibold transition shrink-0 cursor-pointer"
+              >
+                <RefreshCw size={16} className={balanceQuerySubmitting ? 'animate-spin' : ''} />
+                {balanceQuerySubmitting ? 'Querying...' : 'Sync Balance'}
+              </button>
+            </form>
+          )}
         </div>
 
-        {/* Table layout */}
-        {loading ? (
-          <div className="p-12 flex flex-col items-center justify-center gap-3">
-            <RefreshCw className="animate-spin text-brand-accent" size={32} />
-            <p className="text-sm text-brand-text/60">Loading transaction registry...</p>
-          </div>
-        ) : error ? (
-          <div className="p-12 text-center text-status-danger">
-            <p className="font-semibold text-sm">Error Loading Registry</p>
-            <p className="text-xs opacity-80 mt-1">{error}</p>
-          </div>
-        ) : filteredTxs.length === 0 ? (
-          <div className="p-12 text-center text-brand-text/40">
-            <p className="text-sm">No transaction records found matching filters.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-brand-bg/40 text-[11px] font-semibold uppercase tracking-wider text-brand-text/45 border-b border-brand-border/40">
-                  <th className="px-6 py-4">Internal Reference</th>
-                  <th className="px-6 py-4">Destination</th>
-                  <th className="px-6 py-4">Amount</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Initiated</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-brand-border/30">
-                {filteredTxs.map((tx) => (
-                  <tr key={tx.id} className="hover:bg-brand-bg/20 transition duration-150">
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-brand-text text-sm truncate max-w-[180px]">
-                        {tx.internal_reference}
-                      </div>
-                      {tx.transaction_id && (
-                        <div className="text-[10px] text-brand-text/40 mt-0.5">M-Pesa ID: {tx.transaction_id}</div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm font-semibold text-brand-text">{tx.destination_shortcode}</div>
-                      <div className="text-[10px] text-brand-text/40 mt-0.5">B2C Utility Channel</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm font-bold text-brand-text">KES {tx.amount.toLocaleString()}</div>
-                      <div className="text-[10px] text-brand-text/40 mt-0.5">{tx.currency}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full border ${getStatusBadgeClass(tx.status)}`}>
-                        {tx.status === 'success' && <CheckCircle2 size={12} />}
-                        {tx.status === 'failed' && <XCircle size={12} />}
-                        {tx.status === 'timeout' && <Clock size={12} />}
-                        {tx.status === 'processing' && <RefreshCw size={12} className="animate-spin" />}
-                        {tx.status.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-xs text-brand-text/60">
-                      {new Date(tx.created_at).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => {
-                          setSelectedTx(tx);
-                          setIsDrawerOpen(true);
-                          setReconciliationMessage(null);
-                        }}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-brand-panel hover:bg-brand-bg border border-brand-border text-brand-text hover:text-brand-accent text-xs font-semibold transition cursor-pointer"
-                      >
-                        Inspect
-                        <ChevronRight size={14} />
-                      </button>
-                    </td>
+        {activeSubTab === 'history' ? (
+          /* TRANSACTION REGISTRY TABLE */
+          loading ? (
+            <div className="p-12 flex flex-col items-center justify-center gap-3">
+              <RefreshCw className="animate-spin text-brand-accent" size={32} />
+              <p className="text-sm text-brand-text/60">Loading transaction registry...</p>
+            </div>
+          ) : error ? (
+            <div className="p-12 text-center text-status-danger">
+              <p className="font-semibold text-sm">Error Loading Registry</p>
+              <p className="text-xs opacity-80 mt-1">{error}</p>
+            </div>
+          ) : filteredTxs.length === 0 ? (
+            <div className="p-12 text-center text-brand-text/40">
+              <p className="text-sm">No transaction records found matching filters.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-brand-bg/40 text-[11px] font-semibold uppercase tracking-wider text-brand-text/45 border-b border-brand-border/40">
+                    <th className="px-6 py-4">Internal Reference</th>
+                    <th className="px-6 py-4">Destination</th>
+                    <th className="px-6 py-4">Amount</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Initiated</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-brand-border/30">
+                  {filteredTxs.map((tx) => (
+                    <tr key={tx.id} className="hover:bg-brand-bg/20 transition duration-150">
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-brand-text text-sm truncate max-w-[180px]">
+                          {tx.internal_reference}
+                        </div>
+                        {tx.transaction_id && (
+                          <div className="text-[10px] text-brand-text/40 mt-0.5">M-Pesa ID: {tx.transaction_id}</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-semibold text-brand-text">{tx.destination_shortcode}</div>
+                        <div className="text-[10px] text-brand-text/40 mt-0.5">B2C Utility Channel</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-bold text-brand-text">KES {tx.amount.toLocaleString()}</div>
+                        <div className="text-[10px] text-brand-text/40 mt-0.5">{tx.currency}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full border ${getStatusBadgeClass(tx.status)}`}>
+                          {tx.status === 'success' && <CheckCircle2 size={12} />}
+                          {tx.status === 'failed' && <XCircle size={12} />}
+                          {tx.status === 'timeout' && <Clock size={12} />}
+                          {tx.status === 'processing' && <RefreshCw size={12} className="animate-spin" />}
+                          {tx.status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-brand-text/60">
+                        {new Date(tx.created_at).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => {
+                            setSelectedTx(tx);
+                            setIsDrawerOpen(true);
+                            setReconciliationMessage(null);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-brand-panel hover:bg-brand-bg border border-brand-border text-brand-text hover:text-brand-accent text-xs font-semibold transition cursor-pointer"
+                        >
+                          Inspect
+                          <ChevronRight size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : (
+          /* STATEFUL BALANCE QUERIES TABLE */
+          balanceQueries.length === 0 ? (
+            <div className="p-12 text-center text-brand-text/40">
+              <p className="text-sm">No account balance query sync logs found.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-brand-bg/40 text-[11px] font-semibold uppercase tracking-wider text-brand-text/45 border-b border-brand-border/40">
+                    <th className="px-6 py-4">Triggered At</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Conversation ID</th>
+                    <th className="px-6 py-4">Originator Conversation ID</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-border/30">
+                  {balanceQueries.map((q) => (
+                    <tr key={q.id} className="hover:bg-brand-bg/20 transition duration-150">
+                      <td className="px-6 py-4 text-sm text-brand-text/80">
+                        {new Date(q.created_at).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold uppercase ${
+                          q.status === 'completed'
+                            ? 'bg-status-success/15 text-status-success'
+                            : q.status === 'failed'
+                            ? 'bg-status-danger/15 text-status-danger'
+                            : q.status === 'timeout'
+                            ? 'bg-amber-500/15 text-amber-500'
+                            : 'bg-blue-500/15 text-blue-400'
+                        }`}>
+                          {q.status === 'completed' && <CheckCircle2 size={12} />}
+                          {q.status === 'failed' && <XCircle size={12} />}
+                          {q.status === 'timeout' && <Clock size={12} />}
+                          {(q.status === 'pending' || q.status === 'processing') && (
+                            <RefreshCw size={12} className="animate-spin" />
+                          )}
+                          {q.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm font-mono text-brand-text/60 max-w-[150px] truncate">
+                        {q.conversation_id || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 text-sm font-mono text-brand-text/60 max-w-[150px] truncate">
+                        {q.originator_conversation_id || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => {
+                            setSelectedBalanceQuery(q);
+                            setIsBalanceQueryModalOpen(true);
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-brand-panel hover:bg-brand-bg border border-brand-border text-brand-text hover:text-brand-accent text-xs font-medium transition cursor-pointer"
+                        >
+                          Inspect Payloads
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
       </div>
 
@@ -1365,6 +1546,101 @@ export function TreasuryTopupPage() {
                 className="px-4 py-2 rounded-xl bg-brand-accent hover:bg-brand-accent/90 disabled:bg-brand-accent/50 text-brand-bg text-sm font-semibold transition cursor-pointer"
               >
                 {savingSettings ? 'Saving...' : 'Save Settings'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ACCOUNT BALANCE PAYLOADS INSPECTION MODAL */}
+      {isBalanceQueryModalOpen && selectedBalanceQuery && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-bg/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-3xl bg-brand-panel border border-brand-border rounded-2xl p-6 shadow-2xl relative animate-scale-up max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-brand-border/60 pb-3 mb-4 shrink-0">
+              <h4 className="font-bold text-lg text-brand-text flex items-center gap-2">
+                <Database className="text-brand-accent w-5 h-5" />
+                Balance Query Payload Inspector
+              </h4>
+              <button 
+                onClick={() => {
+                  setIsBalanceQueryModalOpen(false);
+                  setSelectedBalanceQuery(null);
+                }} 
+                className="opacity-60 hover:opacity-100 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-6 overflow-y-auto pr-2 text-sm flex-1">
+              {/* Parse and show balances if completed */}
+              {selectedBalanceQuery.status === 'completed' && (
+                <div className="p-4 bg-brand-bg/40 border border-brand-border/40 rounded-xl space-y-3">
+                  <h5 className="text-xs font-bold uppercase tracking-wider text-brand-text/50 flex items-center gap-1.5">
+                    <CheckCircle2 size={14} className="text-status-success" />
+                    Synchronized Balances (Parsed)
+                  </h5>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                    <div className="bg-brand-panel/60 p-3 rounded-lg border border-brand-border/30">
+                      <p className="text-brand-text/45 font-semibold">WORKING ACCOUNT (COLLECTIONS)</p>
+                      <p className="text-lg font-bold text-brand-text mt-1">
+                        KES {selectedBalanceQuery.raw_result?.Result?.ResultParameters?.ResultParameter
+                          ?.find((p: any) => p.Name === 'AccountBalance' || p.Key === 'AccountBalance')
+                          ?.Value?.split('&')
+                          ?.find((a: string) => a.toLowerCase().includes('working'))
+                          ?.split('|')[3] || '0.00'}
+                      </p>
+                      <p className="text-[10px] text-brand-text/30 mt-0.5">Mapped to Paybill Collection Main</p>
+                    </div>
+
+                    <div className="bg-brand-panel/60 p-3 rounded-lg border border-brand-border/30">
+                      <p className="text-brand-text/45 font-semibold">UTILITY ACCOUNT (DISBURSEMENTS)</p>
+                      <p className="text-lg font-bold text-brand-text mt-1">
+                        KES {selectedBalanceQuery.raw_result?.Result?.ResultParameters?.ResultParameter
+                          ?.find((p: any) => p.Name === 'AccountBalance' || p.Key === 'AccountBalance')
+                          ?.Value?.split('&')
+                          ?.find((a: string) => a.toLowerCase().includes('utility'))
+                          ?.split('|')[3] || '0.00'}
+                      </p>
+                      <p className="text-[10px] text-brand-text/30 mt-0.5">Mapped to Disbursements Vault</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Request Payload */}
+              <div>
+                <h5 className="text-xs font-bold uppercase tracking-wider text-brand-text/50 mb-2">1. Request Payload (Initiated)</h5>
+                <pre className="p-4 bg-brand-bg rounded-xl text-[11px] font-mono text-brand-text/85 overflow-x-auto border border-brand-border/30">
+                  {JSON.stringify(selectedBalanceQuery.raw_request, null, 2)}
+                </pre>
+              </div>
+
+              {/* Response Payload */}
+              <div>
+                <h5 className="text-xs font-bold uppercase tracking-wider text-brand-text/50 mb-2">2. Response Acknowledgment (Daraja Gateway)</h5>
+                <pre className="p-4 bg-brand-bg rounded-xl text-[11px] font-mono text-brand-text/85 overflow-x-auto border border-brand-border/30">
+                  {JSON.stringify(selectedBalanceQuery.raw_response, null, 2)}
+                </pre>
+              </div>
+
+              {/* Callback Result Payload */}
+              <div>
+                <h5 className="text-xs font-bold uppercase tracking-wider text-brand-text/50 mb-2">3. Webhook Callback Result (Asynchronous Result)</h5>
+                <pre className="p-4 bg-brand-bg rounded-xl text-[11px] font-mono text-brand-text/85 overflow-x-auto border border-brand-border/30">
+                  {JSON.stringify(selectedBalanceQuery.raw_result, null, 2)}
+                </pre>
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-4 pt-3 border-t border-brand-border/60 shrink-0">
+              <button 
+                onClick={() => {
+                  setIsBalanceQueryModalOpen(false);
+                  setSelectedBalanceQuery(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-brand-panel hover:bg-brand-bg border border-brand-border text-brand-text text-sm font-semibold transition cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

@@ -14,6 +14,9 @@ import { reconcileB2CTopup } from './services/b2cTopup/reconcileB2CTopup';
 import { initiateTransactionStatus } from './services/transactionStatus/initiateTransactionStatus';
 import { handleTransactionStatusResult } from './services/transactionStatus/handleTransactionStatusResult';
 import { handleTransactionStatusTimeout } from './services/transactionStatus/handleTransactionStatusTimeout';
+import { initiateAccountBalance } from './services/accountBalance/initiateAccountBalance';
+import { handleAccountBalanceResult } from './services/accountBalance/handleAccountBalanceResult';
+import { handleAccountBalanceTimeout } from './services/accountBalance/handleAccountBalanceTimeout';
 
 dotenv.config();
 
@@ -597,28 +600,42 @@ app.post('/api/webhooks/transaction-status/timeout', async (req, res) => {
   }
 });
 
+app.post('/api/webhooks/account-balance/result', async (req, res) => {
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+  try {
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const result = await handleAccountBalanceResult(req.body, clientIp);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[AccountBalance Result Webhook Error]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/webhooks/account-balance/timeout', async (req, res) => {
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+  try {
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const result = await handleAccountBalanceTimeout(req.body, clientIp);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[AccountBalance Timeout Webhook Error]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 /**
  * 5. ACCOUNT BALANCE QUERY
  * POST /api/mpesa/account/balance
  */
 app.post('/api/mpesa/account/balance', async (req, res) => {
-  const { partyA, remarks } = req.body;
-
-  if (!partyA) {
-    return res.status(400).json({ error: 'Missing partyA parameters.' });
-  }
-
+  const { userId, remarks } = req.body;
   try {
-    const config = await resolveConfig();
-    const result = await DarajaService.queryAccountBalance({
-      Initiator: config.initiatorName || 'api_user',
-      SecurityCredential: config.securityCredential || 'credential',
-      PartyA: partyA,
-      ResultURL: config.callbackUrl,
-      QueueTimeOutURL: config.callbackUrl,
-      Remarks: remarks || 'Querying account balance'
-    });
-
+    const result = await initiateAccountBalance({ userId, remarks });
     return res.json(result);
   } catch (err: any) {
     console.error('[Account Balance Query Error]', err);
