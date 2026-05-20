@@ -11,6 +11,9 @@ import { initiateB2CTopup } from './services/b2cTopup/initiateB2CTopup';
 import { handleB2CTopupResult } from './services/b2cTopup/handleB2CTopupResult';
 import { handleB2CTopupTimeout } from './services/b2cTopup/handleB2CTopupTimeout';
 import { reconcileB2CTopup } from './services/b2cTopup/reconcileB2CTopup';
+import { initiateTransactionStatus } from './services/transactionStatus/initiateTransactionStatus';
+import { handleTransactionStatusResult } from './services/transactionStatus/handleTransactionStatusResult';
+import { handleTransactionStatusTimeout } from './services/transactionStatus/handleTransactionStatusTimeout';
 
 dotenv.config();
 
@@ -538,33 +541,58 @@ app.post('/api/mpesa/reversal', async (req, res) => {
 });
 
 /**
- * 4. TRANSACTION STATUS QUERY
+ * 4. TRANSACTION STATUS QUERY (ENTERPRISE IMPLEMENTATION)
  * POST /api/mpesa/transaction/status
  */
 app.post('/api/mpesa/transaction/status', async (req, res) => {
-  const { transactionId, partyA, identifierType, remarks, occasion } = req.body;
+  const { transactionId, queryType, userId, remarks, occasion } = req.body;
 
-  if (!transactionId || !partyA) {
-    return res.status(400).json({ error: 'Missing parameters.' });
+  if (!transactionId || !queryType) {
+    return res.status(400).json({ error: 'Missing transactionId or queryType parameter.' });
   }
 
   try {
-    const config = await resolveConfig();
-    const result = await DarajaService.queryTransactionStatus({
-      Initiator: config.initiatorName || 'api_user',
-      SecurityCredential: config.securityCredential || 'credential',
-      TransactionID: transactionId,
-      PartyA: partyA,
-      IdentifierType: identifierType || '4',
-      ResultURL: config.callbackUrl,
-      QueueTimeOutURL: config.callbackUrl,
-      Remarks: remarks || 'Querying transaction status',
-      Occasion: occasion
+    const result = await initiateTransactionStatus({
+      transactionId,
+      queryType,
+      userId,
+      remarks,
+      occasion
     });
-
     return res.json(result);
   } catch (err: any) {
     console.error('[Status Query Error]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * TRANSACTION STATUS WEBHOOKS
+ */
+app.post('/api/webhooks/transaction-status/result', async (req, res) => {
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+  try {
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const result = await handleTransactionStatusResult(req.body, clientIp);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[TransactionStatus Result Webhook Error]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/webhooks/transaction-status/timeout', async (req, res) => {
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
+  try {
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const result = await handleTransactionStatusTimeout(req.body, clientIp);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[TransactionStatus Timeout Webhook Error]', err);
     return res.status(500).json({ error: err.message });
   }
 });

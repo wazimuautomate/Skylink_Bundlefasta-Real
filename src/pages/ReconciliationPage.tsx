@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ShieldCheck, Upload, RefreshCcw, RefreshCw, CheckCircle2, AlertCircle, FileText, Search, Download, Eye, Check, X } from 'lucide-react';
 import { supabase } from '../utils/supabaseClient';
 import { ReconciliationWidget } from '../components/ReconciliationWidget';
@@ -32,14 +32,22 @@ interface CustomerItem {
 
 export function ReconciliationPage() {
   const [isReconciling, setIsReconciling] = useState(false);
-  const [activeTab, setActiveTab] = useState<'discrepancies' | 'history'>('discrepancies');
+  const [activeTab, setActiveTab] = useState<'discrepancies' | 'history' | 'status_queries'>('discrepancies');
   
   // Data State
   const [discrepancies, setDiscrepancies] = useState<DiscrepancyItem[]>([]);
   const [history, setHistory] = useState<ReportItem[]>([]);
   const [customers, setCustomers] = useState<CustomerItem[]>([]);
+  const [statusQueries, setStatusQueries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Status Query Form State
+  const [queryReceipt, setQueryReceipt] = useState('');
+  const [queryType, setQueryType] = useState<'C2B' | 'B2C' | 'B2B' | 'REVERSAL'>('C2B');
+  const [queryRemarks, setQueryRemarks] = useState('');
+  const [querySubmitting, setQuerySubmitting] = useState(false);
+  const [selectedQuery, setSelectedQuery] = useState<any | null>(null);
 
   // Search & Resolve State
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,6 +122,16 @@ export function ReconciliationPage() {
 
       setCustomers(custData || []);
 
+      // 5. Fetch status queries
+      const { data: statusData, error: statusErr } = await supabase
+        .from('transaction_status_queries')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (statusErr) throw statusErr;
+      setStatusQueries(statusData || []);
+
     } catch (err: any) {
       console.error(err);
       setError(err.message);
@@ -133,12 +151,56 @@ export function ReconciliationPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reconciliation_reports' }, () => {
         fetchData();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transaction_status_queries' }, () => {
+        fetchData();
+      })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  const handleTriggerStatusQuery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!queryReceipt) {
+      alert('Please enter a Safaricom Receipt Number.');
+      return;
+    }
+    
+    setQuerySubmitting(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      
+      const response = await fetch('/api/mpesa/transaction/status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          transactionId: queryReceipt.trim().toUpperCase(),
+          queryType,
+          remarks: queryRemarks || undefined,
+          userId: userData?.user?.id
+        })
+      });
+
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to trigger status query.');
+      }
+
+      alert(`Status query dispatched! M-Pesa Conversation ID: ${responseData.ConversationID || 'Generated'}`);
+      setQueryReceipt('');
+      setQueryRemarks('');
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert(`Error triggering status query: ${err.message}`);
+    } finally {
+      setQuerySubmitting(false);
+    }
+  };
 
   const filteredDiscrepancies = useMemo(() => {
     return discrepancies.filter(d => {
@@ -464,6 +526,17 @@ export function ReconciliationPage() {
               <FileText size={16} />
               Reconciliation Run History
             </button>
+            <button 
+              onClick={() => setActiveTab('status_queries')}
+              className={`text-sm font-semibold flex items-center gap-2 pb-4 -mb-4 border-b-2 transition-colors ${
+                activeTab === 'status_queries' 
+                  ? 'border-brand-accent text-brand-text' 
+                  : 'border-transparent text-brand-text/50 hover:text-brand-text/80'
+              }`}
+            >
+              <ShieldCheck size={16} className={activeTab === 'status_queries' ? 'text-brand-accent' : ''} />
+              Transaction Status Queries
+            </button>
           </div>
           
           {activeTab === 'discrepancies' && (
@@ -483,7 +556,7 @@ export function ReconciliationPage() {
         </div>
         
         <div className="overflow-auto min-h-[300px]">
-          {activeTab === 'discrepancies' ? (
+          {activeTab === 'discrepancies' && (
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-brand-bg/50 border-b border-brand-border">
                 <tr className="text-brand-text/50">
@@ -540,7 +613,9 @@ export function ReconciliationPage() {
                 )}
               </tbody>
             </table>
-          ) : (
+          )}
+
+          {activeTab === 'history' && (
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-brand-bg/50 border-b border-brand-border">
                 <tr className="text-brand-text/50">
@@ -591,8 +666,215 @@ export function ReconciliationPage() {
               </tbody>
             </table>
           )}
+
+          {activeTab === 'status_queries' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
+              {/* Query Form Panel */}
+              <div className="lg:col-span-1 bg-brand-bg/40 border border-brand-border rounded-xl p-5 space-y-4">
+                <h4 className="text-sm font-bold text-brand-text flex items-center gap-2">
+                  <RefreshCw size={16} className="text-brand-accent animate-pulse" />
+                  Query M-Pesa status
+                </h4>
+                <form onSubmit={handleTriggerStatusQuery} className="space-y-4 text-sm">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-brand-text/60 uppercase">Receipt Number</label>
+                    <input 
+                      type="text" 
+                      value={queryReceipt}
+                      onChange={(e) => setQueryReceipt(e.target.value)}
+                      placeholder="e.g. NLJ0123456" 
+                      className="w-full bg-brand-bg border border-brand-border rounded-lg py-2 px-3 text-brand-text focus:outline-none focus:border-brand-accent font-mono uppercase"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-brand-text/60 uppercase">Query Type</label>
+                    <select 
+                      value={queryType} 
+                      onChange={(e) => setQueryType(e.target.value as any)}
+                      className="w-full bg-brand-bg border border-brand-border rounded-lg py-2 px-3 text-brand-text focus:outline-none focus:border-brand-accent"
+                    >
+                      <option value="C2B">C2B Paybill Collections</option>
+                      <option value="B2C">B2C Treasury Topup</option>
+                      <option value="B2B">B2B Merchant Payment</option>
+                      <option value="REVERSAL">Reversal Request</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-brand-text/60 uppercase">Remarks</label>
+                    <input 
+                      type="text" 
+                      value={queryRemarks}
+                      onChange={(e) => setQueryRemarks(e.target.value)}
+                      placeholder="e.g. Audit settlement check" 
+                      className="w-full bg-brand-bg border border-brand-border rounded-lg py-2 px-3 text-brand-text focus:outline-none focus:border-brand-accent"
+                    />
+                  </div>
+                  <button 
+                    type="submit" 
+                    disabled={querySubmitting || !queryReceipt}
+                    className="w-full py-2 bg-brand-accent hover:opacity-90 disabled:opacity-50 text-white rounded-lg font-semibold transition-all flex items-center justify-center gap-2"
+                  >
+                    {querySubmitting ? (
+                      <>
+                        <RefreshCw size={14} className="animate-spin" />
+                        Dispatching...
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck size={14} />
+                        Run Status Check
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+
+              {/* Status Query Logs List */}
+              <div className="lg:col-span-2 space-y-3">
+                <h4 className="text-sm font-bold text-brand-text/70 uppercase tracking-wide px-1">Recent Queries</h4>
+                <div className="overflow-x-auto border border-brand-border rounded-xl">
+                  <table className="w-full text-left text-sm whitespace-nowrap">
+                    <thead className="bg-brand-bg/50 border-b border-brand-border">
+                      <tr className="text-brand-text/50">
+                        <th className="py-2.5 px-4 font-medium">Timestamp</th>
+                        <th className="py-2.5 px-4 font-medium">Receipt ID</th>
+                        <th className="py-2.5 px-4 font-medium">Type</th>
+                        <th className="py-2.5 px-4 font-medium">Status</th>
+                        <th className="py-2.5 px-4 font-medium text-right">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {statusQueries.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-brand-text/40 italic">
+                            No recent queries found.
+                          </td>
+                        </tr>
+                      ) : (
+                        statusQueries.map((q) => (
+                          <tr key={q.id} className="border-b border-brand-border/40 hover:bg-brand-bg/30 transition-colors">
+                            <td className="py-3 px-4 text-brand-text/60 font-mono text-xs">{formatDate(q.created_at)}</td>
+                            <td className="py-3 px-4 font-mono font-semibold text-brand-text">{q.transaction_id}</td>
+                            <td className="py-3 px-4">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-brand-border text-brand-text/70">
+                                {q.query_type}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs font-semibold border ${
+                                q.status === 'completed' 
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+                                  : q.status === 'failed' 
+                                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                  : q.status === 'timeout'
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                  : 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse'
+                              }`}>
+                                {q.status === 'pending' || q.status === 'processing' ? (
+                                  <RefreshCw size={10} className="animate-spin" />
+                                ) : null}
+                                {q.status.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <button 
+                                onClick={() => setSelectedQuery(q)}
+                                className="px-2 py-1 bg-brand-border hover:bg-brand-border/80 border border-brand-border text-brand-text/80 rounded text-xs transition-all"
+                              >
+                                View Payload
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Selected Query Details Modal */}
+      {selectedQuery && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setSelectedQuery(null)} />
+          
+          <div className="bg-brand-panel border border-brand-border shadow-2xl rounded-2xl w-full max-w-2xl overflow-hidden relative z-50 p-6 space-y-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-bold text-brand-text flex items-center gap-2">
+                  <FileText size={20} className="text-brand-accent" />
+                  Query Payload Inspector
+                </h3>
+                <p className="text-xs text-brand-text/50 mt-1">Raw API JSON request, response, and callback payloads.</p>
+              </div>
+              <button 
+                onClick={() => setSelectedQuery(null)}
+                className="p-1 text-brand-text/40 hover:text-brand-text rounded-full hover:bg-brand-border/40"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-brand-text/50 uppercase">Submission Status</span>
+                <div className="bg-brand-bg p-3 border border-brand-border rounded-lg space-y-1.5 text-xs text-brand-text/90 font-mono">
+                  <div>ID: {selectedQuery.id}</div>
+                  <div>Query Type: {selectedQuery.query_type}</div>
+                  <div>Status: <span className="font-bold text-brand-accent">{selectedQuery.status}</span></div>
+                  <div>Receipt: {selectedQuery.transaction_id}</div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-xs font-semibold text-brand-text/50 uppercase">M-Pesa Identifiers</span>
+                <div className="bg-brand-bg p-3 border border-brand-border rounded-lg space-y-1.5 text-xs text-brand-text/90 font-mono">
+                  <div>ConversationID:</div>
+                  <div className="truncate text-brand-accent" title={selectedQuery.conversation_id}>{selectedQuery.conversation_id}</div>
+                  <div>OriginatorConversationID:</div>
+                  <div className="truncate text-brand-accent" title={selectedQuery.originator_conversation_id}>{selectedQuery.originator_conversation_id}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-xs font-semibold text-brand-text/50 uppercase">Raw Call payloads</span>
+              <div className="max-h-60 overflow-y-auto bg-black/40 border border-brand-border rounded-lg p-4 font-mono text-[10px] text-brand-text/80 space-y-3">
+                {selectedQuery.raw_request && (
+                  <div>
+                    <div className="text-brand-accent font-semibold border-b border-brand-border/40 pb-1 mb-1">1. Outgoing Request:</div>
+                    <pre className="whitespace-pre-wrap">{JSON.stringify(selectedQuery.raw_request, null, 2)}</pre>
+                  </div>
+                )}
+                {selectedQuery.raw_response && (
+                  <div>
+                    <div className="text-brand-accent font-semibold border-b border-brand-border/40 pb-1 mb-1">2. Submit Response:</div>
+                    <pre className="whitespace-pre-wrap">{JSON.stringify(selectedQuery.raw_response, null, 2)}</pre>
+                  </div>
+                )}
+                {selectedQuery.raw_result && (
+                  <div>
+                    <div className="text-brand-accent font-semibold border-b border-brand-border/40 pb-1 mb-1">3. Webhook Callback Result:</div>
+                    <pre className="whitespace-pre-wrap">{JSON.stringify(selectedQuery.raw_result, null, 2)}</pre>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-brand-border">
+              <button 
+                onClick={() => setSelectedQuery(null)}
+                className="px-4 py-2 bg-brand-border hover:bg-brand-border/80 border border-brand-border text-brand-text text-sm font-semibold rounded-xl transition-all"
+              >
+                Close Inspector
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Manual Resolution Overlay Modal */}
       {selectedDiscrepancy && (

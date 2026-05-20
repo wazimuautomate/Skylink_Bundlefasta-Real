@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0-transaction-status] - 2026-05-20
+### Added
+- Implemented production-grade Safaricom Daraja Transaction Status Query API module on dedicated branch `feature/api-transaction-status`.
+- Database Schema: Added `transaction_status_queries` table in Supabase with strict Row Level Security (RLS) policies, indexes, and automatic audit logging.
+- Created Backend Service Layer at `src/server/services/transactionStatus/`:
+  - `initiateTransactionStatus.ts`: State tracking, RSA initiator password encryption, and Daraja status query API dispatching.
+  - `parseTransactionStatusResult.ts`: Webhook callback unpacker parsing transaction details, flags, and account balances.
+  - `handleTransactionStatusResult.ts`: Webhook result handler resolving target transaction states (in `transactions`, `b2c_account_topups`, or `business_buy_goods_transactions` tables), writing double-entry ledger entries, and pushing dashboard notifications.
+  - `handleTransactionStatusTimeout.ts`: Queue timeout handler updating status queries and sending alert notifications.
+- Registered Express routes in `src/server/index.ts`:
+  - `POST /api/mpesa/transaction/status`: High-reliability, state-tracked status query initiator.
+  - `POST /api/webhooks/transaction-status/result`: Validation-enforced status result callback webhook.
+  - `POST /api/webhooks/transaction-status/timeout`: Validation-enforced status queue timeout webhook.
+- Frontend Dashboard: Integrated new "Transaction Status Queries" tab in `src/pages/ReconciliationPage.tsx` with:
+  - Form to query any C2B, B2C, B2B, or REVERSAL transaction by Safaricom Receipt Number.
+  - Real-time PostgreSQL subscription updates for query log state changes.
+  - Interactive "View Payload" modal dialog displaying the raw JSON payload inspector (request, response, and webhook callback).
+
 ## [1.2.0-b2b] - 2026-05-20
 ### Added
 - Implemented full production-grade M-PESA B2B Business Buy Goods (Merchant Payments) module.
