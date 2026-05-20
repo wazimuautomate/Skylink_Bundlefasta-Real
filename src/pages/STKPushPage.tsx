@@ -11,6 +11,7 @@ interface STKRequest {
   reference: string | null;
   status: string;
   occurred_at: string;
+  checkout_request_id: string | null;
 }
 
 interface PaymentLink {
@@ -56,12 +57,18 @@ export function STKPushPage() {
   const [sharingLink, setSharingLink] = useState<PaymentLink | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  // STK Query state
+  const [queryingId, setQueryingId] = useState<string | null>(null); // tracks which row is being queried
+  const [manualQueryId, setManualQueryId] = useState(''); // manual CheckoutRequestID input
+  const [isManualQuerying, setIsManualQuerying] = useState(false);
+  const [queryResult, setQueryResult] = useState<{ success: boolean; message: string; reconciled?: boolean; details?: any } | null>(null);
+
   const fetchSTKPushes = async () => {
     try {
       setLoading(true);
       const { data, error: err } = await supabase
         .from('transactions')
-        .select('id, phone_number, amount, reference, status, occurred_at')
+        .select('id, phone_number, amount, reference, status, occurred_at, checkout_request_id')
         .eq('transaction_type', 'STK_PUSH')
         .order('occurred_at', { ascending: false });
 
@@ -73,7 +80,8 @@ export function STKPushPage() {
         amount: Number(tx.amount),
         reference: tx.reference,
         status: tx.status,
-        occurred_at: tx.occurred_at
+        occurred_at: tx.occurred_at,
+        checkout_request_id: tx.checkout_request_id || null
       }));
 
       setRequests(mapped);
@@ -350,6 +358,67 @@ export function STKPushPage() {
     });
   };
 
+  // Query a specific STK Push row by CheckoutRequestID (per-row inline query)
+  const handleQueryRowStatus = async (req: STKRequest) => {
+    if (!req.checkout_request_id) {
+      alert('No CheckoutRequestID available for this transaction.');
+      return;
+    }
+    setQueryingId(req.id);
+    try {
+      const response = await fetch('/api/mpesa/stkpush/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkoutRequestId: req.checkout_request_id })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert(`Query failed: ${data.error || data.resultDesc}`);
+      } else {
+        const msg = data.resolved
+          ? `✓ Reconciled! ResultCode ${data.resultCode}: ${data.resultDesc}`
+          : `Query returned ResultCode ${data.resultCode}: ${data.resultDesc} (no status change needed)`;
+        alert(msg);
+        fetchSTKPushes();
+      }
+    } catch (err: any) {
+      alert(`Query error: ${err.message}`);
+    } finally {
+      setQueryingId(null);
+    }
+  };
+
+  // Manual query by CheckoutRequestID from the standalone form
+  const handleManualQuery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualQueryId.trim()) return;
+    setIsManualQuerying(true);
+    setQueryResult(null);
+    try {
+      const response = await fetch('/api/mpesa/stkpush/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkoutRequestId: manualQueryId.trim() })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setQueryResult({ success: false, message: data.error || data.resultDesc || 'Query failed.', details: data });
+      } else {
+        setQueryResult({
+          success: true,
+          message: `ResultCode ${data.resultCode}: ${data.resultDesc}`,
+          reconciled: !!data.resolved,
+          details: data
+        });
+        if (data.resolved) fetchSTKPushes();
+      }
+    } catch (err: any) {
+      setQueryResult({ success: false, message: err.message || 'Network error.', details: null });
+    } finally {
+      setIsManualQuerying(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-8 font-sans">
       {/* Metrics Row */}
@@ -500,6 +569,7 @@ export function STKPushPage() {
                     <th className="pb-3 pt-4 px-6 font-medium">Amount</th>
                     <th className="pb-3 pt-4 px-6 font-medium">Reference</th>
                     <th className="pb-3 pt-4 px-6 font-medium">Status</th>
+                    <th className="pb-3 pt-4 px-6 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -520,7 +590,7 @@ export function STKPushPage() {
                     </tr>
                   ) : filteredRequests.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-20 text-center text-brand-text/40">
+                      <td colSpan={6} className="py-20 text-center text-brand-text/40">
                         No push history found.
                       </td>
                     </tr>
@@ -544,6 +614,20 @@ export function STKPushPage() {
                             {req.status === 'failed' && <XCircle size={12} />}
                             {req.status}
                           </span>
+                        </td>
+                        <td className="py-3 px-6">
+                          {req.status === 'pending' && req.checkout_request_id && (
+                            <button
+                              onClick={() => handleQueryRowStatus(req)}
+                              disabled={queryingId === req.id}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-panel hover:bg-brand-border border border-brand-border rounded-lg text-xs font-semibold text-brand-text transition-colors disabled:opacity-50"
+                            >
+                              {queryingId === req.id
+                                ? <RefreshCw size={12} className="animate-spin" />
+                                : <Search size={12} />}
+                              Query
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -797,6 +881,78 @@ export function STKPushPage() {
           )}
         </div>
       </div>
+      {/* STK Push Query — Manual Status Check & Reconciliation */}
+      <div className="bg-brand-panel border border-brand-border rounded-xl shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-brand-border bg-brand-bg/30">
+          <h3 className="text-lg font-bold text-brand-text flex items-center gap-2">
+            <Search size={20} className="text-brand-accent" />
+            M-Pesa Express Query
+          </h3>
+          <p className="text-sm text-brand-text/50 mt-1">Manually check the status of any STK Push request by CheckoutRequestID. Reconciles pending transactions automatically if a result is found.</p>
+        </div>
+        <div className="p-6">
+          <div className="max-w-xl">
+            <form onSubmit={handleManualQuery} className="flex gap-3">
+              <input
+                type="text"
+                required
+                value={manualQueryId}
+                onChange={(e) => setManualQueryId(e.target.value)}
+                placeholder="Enter CheckoutRequestID (e.g. ws_CO_...)" 
+                className="flex-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all font-mono text-sm"
+              />
+              <button
+                type="submit"
+                disabled={isManualQuerying}
+                className="px-5 py-2 bg-brand-accent hover:opacity-90 text-black font-bold rounded-lg transition-all flex items-center gap-2 disabled:opacity-50 text-sm shrink-0"
+              >
+                {isManualQuerying ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />}
+                Query
+              </button>
+            </form>
+
+            {queryResult && (
+              <div className={`mt-4 p-4 rounded-xl border ${
+                queryResult.success
+                  ? queryResult.reconciled
+                    ? 'bg-emerald-500/5 border-emerald-500/25 text-emerald-400'
+                    : 'bg-sky-500/5 border-sky-500/25 text-sky-400'
+                  : 'bg-rose-500/5 border-rose-500/25 text-rose-400'
+              }`}>
+                <div className="flex items-start gap-2">
+                  <span className="text-lg mt-0.5">
+                    {queryResult.success ? (queryResult.reconciled ? '✓' : 'ℹ') : '✕'}
+                  </span>
+                  <div className="flex-1">
+                    <p className="font-semibold text-sm">
+                      {queryResult.success
+                        ? queryResult.reconciled ? 'Reconciled Successfully' : 'Query Successful'
+                        : 'Query Failed'}
+                    </p>
+                    <p className="text-xs mt-1 opacity-80">{queryResult.message}</p>
+                    {queryResult.reconciled && (
+                      <p className="text-xs mt-1 font-semibold opacity-90">Transaction status has been updated in the database.</p>
+                    )}
+                    {queryResult.details && (
+                      <details className="mt-3">
+                        <summary className="text-[10px] font-mono cursor-pointer opacity-60 hover:opacity-100">View raw response ▾</summary>
+                        <pre className="mt-2 p-3 bg-brand-bg rounded-lg text-[9px] font-mono text-brand-text/70 overflow-x-auto max-h-[160px] leading-relaxed border border-brand-border">
+                          {JSON.stringify(queryResult.details, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <p className="mt-4 text-xs text-brand-text/40">
+              Tip: Pending transactions in the history table above also show an inline <strong className="text-brand-text/60">Query</strong> button.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Fallback Share Modal */}
       <AnimatePresence>
         {sharingLink && (

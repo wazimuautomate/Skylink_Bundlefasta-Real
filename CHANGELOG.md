@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0-stk-query] - 2026-05-20
+### Added
+- Upgraded **M-Pesa Express Query** (STK Push Query) API to production-grade status on dedicated branch `feature/api-stk-query`.
+- Previously the route was a bare pass-through to `DarajaService.querySTKPush()`. Now includes DB reconciliation, audit trail, and user notifications.
+- Created Backend Service at `src/server/services/stkQuery/querySTKStatus.ts`:
+  - Calls `POST /mpesa/stkpushquery/v1/query` with correctly structured `BusinessShortCode`, `Password` (base64 STK password), `Timestamp`, and `CheckoutRequestID`.
+  - **DB Reconciliation**: Looks up the `transactions` row by `checkout_request_id`; if still `pending`, updates status to `completed` (ResultCode 0) or `failed` (non-zero), persists `result_code` and `result_desc`, and returns `resolved: true`.
+  - **Idempotency**: Skips update if transaction is already in a terminal state — does not overwrite `completed` or `failed` statuses.
+  - **Audit Trail**: Writes `STK_QUERY_DISPATCHED`, `STK_QUERY_RECONCILED_SUCCESS`, `STK_QUERY_RECONCILED_FAILED`, or `STK_QUERY_ERROR` events to `audit_logs`.
+  - **User Notification**: Inserts a `notifications` record on reconciliation (success or failure) for the requesting user.
+  - Returns structured `STKQueryResult`: `{ success, resultCode, resultDesc, resolved, transactionId, merchantRequestId, checkoutRequestId, rawResponse }`.
+- Upgraded Express route in `src/server/index.ts`:
+  - `POST /api/mpesa/stkpush/query`: Now delegates to `querySTKStatus` service, accepts optional `userId`, returns structured reconciliation result.
+- Frontend: Extended `src/pages/STKPushPage.tsx` with two Query entry points:
+  - **Inline per-row Query button**: Appears on `pending` rows that have a `checkout_request_id`. Clicking triggers the query, shows a result alert, and refreshes the table if reconciled. Spinner while in-flight.
+  - **Standalone Query Form**: New "M-Pesa Express Query" section below Payment Links — accepts a raw `CheckoutRequestID` input, shows a color-coded result panel (emerald = reconciled, sky = query success no-op, rose = failure), includes a collapsible raw response JSON inspector.
+  - `checkout_request_id` added to `STKRequest` interface and DB select/map.
+  - `Actions` column added to the history table header; `colSpan` updated from 5 to 6.
+
 ## [1.6.0-business-to-pochi] - 2026-05-20
 ### Added
 - Implemented production-grade Safaricom Daraja **Business to Pochi** payout module on dedicated branch `feature/api-business-to-pochi`.
