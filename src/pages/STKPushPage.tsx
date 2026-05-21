@@ -63,13 +63,7 @@ export function STKPushPage() {
   const [isManualQuerying, setIsManualQuerying] = useState(false);
   const [queryResult, setQueryResult] = useState<{ success: boolean; message: string; reconciled?: boolean; details?: any } | null>(null);
 
-  // STK Simulate State (sandbox only)
-  const [simPhone, setSimPhone] = useState('');
-  const [simAmount, setSimAmount] = useState('');
-  const [simBillRef, setSimBillRef] = useState('');
-  const [simCommandId, setSimCommandId] = useState<'CustomerPayBillOnline' | 'CustomerBuyGoodsOnline'>('CustomerPayBillOnline');
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [simResult, setSimResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
+
 
   const fetchSTKPushes = async () => {
     try {
@@ -171,10 +165,13 @@ export function STKPushPage() {
     setIsSubmitting(true);
     
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/mpesa/stkpush', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           phone: phone,
@@ -366,7 +363,6 @@ export function STKPushPage() {
     });
   };
 
-<<<<<<< HEAD
   // Query a specific STK Push row by CheckoutRequestID (per-row inline query)
   const handleQueryRowStatus = async (req: STKRequest) => {
     if (!req.checkout_request_id) {
@@ -375,9 +371,14 @@ export function STKPushPage() {
     }
     setQueryingId(req.id);
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/mpesa/stkpush/query', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ checkoutRequestId: req.checkout_request_id })
       });
       const data = await response.json();
@@ -404,9 +405,14 @@ export function STKPushPage() {
     setIsManualQuerying(true);
     setQueryResult(null);
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/mpesa/stkpush/query', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ checkoutRequestId: manualQueryId.trim() })
       });
       const data = await response.json();
@@ -425,40 +431,10 @@ export function STKPushPage() {
       setQueryResult({ success: false, message: err.message || 'Network error.', details: null });
     } finally {
       setIsManualQuerying(false);
-=======
-  const handleSimulate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSimulating(true);
-    setSimResult(null);
-
-    try {
-      const response = await fetch('/api/mpesa/stk/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msisdn: simPhone,
-          amount: Number(simAmount),
-          billRefNumber: simBillRef,
-          commandId: simCommandId
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setSimResult({ success: false, message: data.error || data.responseDescription || 'Simulation failed.', details: data });
-      } else {
-        setSimResult({ success: true, message: data.responseDescription || 'Simulation dispatched. Monitor your STK Push history for the incoming callback.', details: data });
-        // Refresh STK history to show simulated incoming transaction
-        setTimeout(() => fetchSTKPushes(), 2000);
-      }
-    } catch (err: any) {
-      setSimResult({ success: false, message: err.message || 'Network error.', details: null });
-    } finally {
-      setIsSimulating(false);
->>>>>>> feature/api-stk-simulate
     }
   };
+
+
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-8 font-sans">
@@ -922,7 +898,6 @@ export function STKPushPage() {
           )}
         </div>
       </div>
-<<<<<<< HEAD
       {/* STK Push Query — Manual Status Check & Reconciliation */}
       <div className="bg-brand-panel border border-brand-border rounded-xl shadow-sm overflow-hidden">
         <div className="p-6 border-b border-brand-border bg-brand-bg/30">
@@ -980,120 +955,6 @@ export function STKPushPage() {
                         <summary className="text-[10px] font-mono cursor-pointer opacity-60 hover:opacity-100">View raw response ▾</summary>
                         <pre className="mt-2 p-3 bg-brand-bg rounded-lg text-[9px] font-mono text-brand-text/70 overflow-x-auto max-h-[160px] leading-relaxed border border-brand-border">
                           {JSON.stringify(queryResult.details, null, 2)}
-=======
-      {/* STK Push Simulate Section — SANDBOX ONLY */}
-      <div className="bg-brand-panel border border-amber-500/30 rounded-xl shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-brand-border bg-amber-500/5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-bold text-brand-text flex items-center gap-2">
-                <span className="text-amber-400">⚗</span>
-                M-Pesa Express Simulate
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-400 text-[10px] font-bold uppercase tracking-widest ml-1">Sandbox Only</span>
-              </h3>
-              <p className="text-sm text-brand-text/50 mt-1">Simulate a C2B customer payment to trigger the STK callback flow without an actual device prompt. Use to validate webhook endpoints in sandbox.</p>
-            </div>
-          </div>
-        </div>
-        <div className="p-6">
-          <div className="max-w-xl">
-            {/* Sandbox warning banner */}
-            <div className="mb-5 p-3 bg-amber-500/10 border border-amber-500/25 rounded-lg flex items-start gap-2.5">
-              <span className="text-amber-400 text-base mt-0.5">⚠</span>
-              <p className="text-xs text-amber-300/80 leading-relaxed">
-                <strong className="text-amber-400">Warning:</strong> This API only works in the <strong>Safaricom Sandbox</strong> environment. Calling it against production credentials will be rejected by Daraja. Simulate mode fires a real API call to the sandbox and will trigger your registered C2B callback URL.
-              </p>
-            </div>
-
-            <form onSubmit={handleSimulate} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-brand-text/80 mb-1.5">Customer Phone (MSISDN)</label>
-                  <input
-                    type="text"
-                    required
-                    value={simPhone}
-                    onChange={(e) => setSimPhone(e.target.value)}
-                    placeholder="e.g. 254712345678"
-                    className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-amber-400/60 focus:ring-1 focus:ring-amber-400/30 transition-all font-mono text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-brand-text/80 mb-1.5">Amount (KES)</label>
-                  <input
-                    type="number"
-                    required
-                    min="1"
-                    value={simAmount}
-                    onChange={(e) => setSimAmount(e.target.value)}
-                    placeholder="e.g. 100"
-                    className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-amber-400/60 focus:ring-1 focus:ring-amber-400/30 transition-all text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-brand-text/80 mb-1.5">Bill Ref / Account Number</label>
-                  <input
-                    type="text"
-                    required
-                    value={simBillRef}
-                    onChange={(e) => setSimBillRef(e.target.value)}
-                    placeholder="e.g. TEST-REF-001"
-                    className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-amber-400/60 focus:ring-1 focus:ring-amber-400/30 transition-all text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-brand-text/80 mb-1.5">Command ID</label>
-                  <select
-                    value={simCommandId}
-                    onChange={(e) => setSimCommandId(e.target.value as 'CustomerPayBillOnline' | 'CustomerBuyGoodsOnline')}
-                    className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-amber-400/60 transition-all text-sm"
-                  >
-                    <option value="CustomerPayBillOnline">CustomerPayBillOnline (Paybill)</option>
-                    <option value="CustomerBuyGoodsOnline">CustomerBuyGoodsOnline (Till)</option>
-                  </select>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSimulating}
-                className="w-full sm:w-auto px-8 py-2.5 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm shadow-sm"
-              >
-                {isSimulating ? (
-                  <>
-                    <RefreshCw size={16} className="animate-spin" />
-                    Simulating...
-                  </>
-                ) : (
-                  <>
-                    <span>⚗</span>
-                    Fire Simulation
-                  </>
-                )}
-              </button>
-            </form>
-
-            {/* Result Display */}
-            {simResult && (
-              <div className={`mt-5 p-4 rounded-xl border ${
-                simResult.success
-                  ? 'bg-emerald-500/5 border-emerald-500/25 text-emerald-400'
-                  : 'bg-rose-500/5 border-rose-500/25 text-rose-400'
-              }`}>
-                <div className="flex items-start gap-2">
-                  <span className="text-lg mt-0.5">{simResult.success ? '✓' : '✕'}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-sm">{simResult.success ? 'Simulation Dispatched' : 'Simulation Failed'}</p>
-                    <p className="text-xs mt-1 opacity-80">{simResult.message}</p>
-                    {simResult.details && (
-                      <details className="mt-3">
-                        <summary className="text-[10px] font-mono cursor-pointer opacity-60 hover:opacity-100">View raw response ▾</summary>
-                        <pre className="mt-2 p-3 bg-brand-bg rounded-lg text-[9px] font-mono text-brand-text/70 overflow-x-auto max-h-[160px] leading-relaxed border border-brand-border">
-                          {JSON.stringify(simResult.details, null, 2)}
->>>>>>> feature/api-stk-simulate
                         </pre>
                       </details>
                     )}
@@ -1101,16 +962,15 @@ export function STKPushPage() {
                 </div>
               </div>
             )}
-<<<<<<< HEAD
 
             <p className="mt-4 text-xs text-brand-text/40">
               Tip: Pending transactions in the history table above also show an inline <strong className="text-brand-text/60">Query</strong> button.
             </p>
-=======
->>>>>>> feature/api-stk-simulate
           </div>
         </div>
       </div>
+
+
 
       {/* Fallback Share Modal */}
       <AnimatePresence>

@@ -284,10 +284,13 @@ export function MerchantPaymentsPage() {
     setIsSubmitting(true);
 
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/business-buy-goods', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           receiverTill,
@@ -340,10 +343,13 @@ export function MerchantPaymentsPage() {
 
     setIsSubmitting(true);
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/business-buy-goods/retry', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           transactionId: tx.id,

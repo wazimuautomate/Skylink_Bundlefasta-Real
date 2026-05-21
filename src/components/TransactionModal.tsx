@@ -144,10 +144,13 @@ export function TransactionModal({ transaction, isOpen, onClose, onUpdate }: Tra
       if (!userData?.user) throw new Error('Unauthorized');
 
       // Submit through Express API
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/mpesa/reversal', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           originalTransactionId: transaction.id,

@@ -24,17 +24,35 @@ import { initiateBusinessToPochi } from './services/businessToPochi/initiateBusi
 import { handleBusinessToPochiResult } from './services/businessToPochi/handleBusinessToPochiResult';
 import { handleBusinessToPochiTimeout } from './services/businessToPochi/handleBusinessToPochiTimeout';
 import { querySTKStatus } from './services/stkQuery/querySTKStatus';
-import { initiateSTKSimulate } from './services/stkSimulate/initiateSTKSimulate';
 
 dotenv.config();
 
 const app = express();
 
-// Custom CORS Middleware
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
+// Security Headers & CORS Middleware
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || allowedOrigins.some(o => o === '*'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-mpesa-token');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+  // Hardened Security Headers
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-ancestors 'none';");
+
   if (req.method === 'OPTIONS') {
     res.sendStatus(204);
     return;
@@ -54,111 +72,24 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-/**
- * Daraja Connection Test Endpoint
- * POST /api/mpesa/test-connection
- */
-app.post('/api/mpesa/test-connection', async (req, res) => {
-  const { action, payload } = req.body;
-  const start = Date.now();
+// Authentication Middleware using Supabase Auth JWT
+async function requireAuth(req: any, res: any, next: any) {
   try {
-    const config = await resolveConfig();
-    let result: any = null;
-
-    if (action === 'oauth') {
-      const token = await getAccessToken(config);
-      result = {
-        access_token: token.substring(0, 8) + '...' + token.substring(token.length - 8),
-        expires_in: 3599
-      };
-    } else if (action === 'stkpush') {
-      const phone = payload?.phone || '254708374149';
-      const amount = Number(payload?.amount) || 10;
-      const ref = payload?.reference || 'TEST-' + Math.floor(Math.random() * 10000);
-      result = await DarajaService.initiateSTKPush(phone, amount, ref, 'Test STK Push');
-    } else if (action === 'balance') {
-      result = await DarajaService.queryAccountBalance({
-        Initiator: config.initiatorName || 'api_user',
-        SecurityCredential: config.securityCredential || 'credential',
-        PartyA: config.shortCode || '174379',
-        ResultURL: config.callbackUrl,
-        QueueTimeOutURL: config.callbackUrl,
-        Remarks: 'Test Account Balance'
-      });
-    } else if (action === 'status') {
-      const transactionId = payload?.transactionId || 'OHT1234567';
-      result = await DarajaService.queryTransactionStatus({
-        Initiator: config.initiatorName || 'api_user',
-        SecurityCredential: config.securityCredential || 'credential',
-        TransactionID: transactionId,
-        PartyA: config.shortCode || '174379',
-        IdentifierType: '4',
-        ResultURL: config.callbackUrl,
-        QueueTimeOutURL: config.callbackUrl,
-        Remarks: 'Test Transaction Status'
-      });
-    } else if (action === 'b2c') {
-      const phone = payload?.phone || '254708374149';
-      const amount = Number(payload?.amount) || 10;
-      result = await DarajaService.requestB2C({
-        CommandID: 'BusinessPayment',
-        Amount: amount,
-        PartyB: phone,
-        Remarks: 'Test B2C',
-        QueueTimeOutURL: config.callbackUrl,
-        ResultURL: config.callbackUrl
-      });
-    } else if (action === 'reversal') {
-      const transactionId = payload?.transactionId || 'OHT1234567';
-      const amount = Number(payload?.amount) || 10;
-      result = await DarajaService.requestReversal({
-        Initiator: config.initiatorName || 'api_user',
-        SecurityCredential: config.securityCredential || 'credential',
-        TransactionID: transactionId,
-        Amount: amount,
-        ReceiverParty: config.shortCode || '174379',
-        RecieverIdentifierType: '4',
-        ResultURL: config.callbackUrl,
-        QueueTimeOutURL: config.callbackUrl,
-        Remarks: 'Test Reversal'
-      });
-    } else if (action === 'b2b_buy_goods') {
-      const till = payload?.till || '174379';
-      const amount = Number(payload?.amount) || 10;
-      result = await initiateBusinessBuyGoods({
-        receiverTill: till,
-        amount,
-        accountReference: payload?.reference || 'TEST-B2B',
-        remarks: payload?.remarks || 'Test B2B Buy Goods Payout',
-        confirmationPassword: payload?.password,
-        userId: payload?.userId
-      });
-    } else {
-      return res.status(400).json({ error: 'Unknown test action' });
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
     }
-
-    const latency = Date.now() - start;
-    return res.json({
-      success: true,
-      action,
-      environment: config.env,
-      timestamp: new Date().toISOString(),
-      latency,
-      payload: result
-    });
+    const token = authHeader.split(' ')[1];
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      return res.status(401).json({ error: 'Unauthorized: Session invalid or expired' });
+    }
+    req.user = user;
+    next();
   } catch (err: any) {
-    const latency = Date.now() - start;
-    console.error(`[Test Connection Error] Action: ${action}`, err);
-    return res.status(500).json({
-      success: false,
-      action,
-      environment: 'sandbox',
-      timestamp: new Date().toISOString(),
-      latency,
-      error: err.message
-    });
+    return res.status(401).json({ error: 'Unauthorized: Authentication error' });
   }
-});
+}
 
 /**
  * 7. STK PUSH (Initiation Request)
@@ -172,7 +103,44 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
   }
 
   try {
-    // 1. Dispatch STK Push to Safaricom Daraja API
+    // 1. Authorization checks:
+    if (paymentLinkId) {
+      // Look up and validate the payment link
+      const { data: link, error: linkError } = await supabase
+        .from('payment_links')
+        .select('*')
+        .eq('id', paymentLinkId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (linkError || !link) {
+        return res.status(403).json({ error: 'Forbidden: Invalid or inactive payment link.' });
+      }
+
+      // Check expiry date
+      if (link.expiry_date && new Date(link.expiry_date) < new Date()) {
+        return res.status(403).json({ error: 'Forbidden: This payment link has expired.' });
+      }
+
+      // Check fixed amount if applicable
+      if (link.amount !== null && Number(link.amount) !== Number(amount)) {
+        return res.status(400).json({ error: 'Bad Request: Amount does not match the fixed payment link amount.' });
+      }
+    } else {
+      // Require Admin authentication if paymentLinkId is absent (admin-initiated STK push)
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized: Admin authentication token required.' });
+      }
+      const token = authHeader.split(' ')[1];
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (error || !user) {
+        return res.status(401).json({ error: 'Unauthorized: Session invalid or expired.' });
+      }
+      req.user = user;
+    }
+
+    // 2. Dispatch STK Push to Safaricom Daraja API
     const mpesaResponse = await DarajaService.initiateSTKPush(
       phone,
       Number(amount),
@@ -237,7 +205,7 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
  * 8. STK PUSH QUERY (Status Check + Reconciliation)
  * POST /api/mpesa/stkpush/query
  */
-app.post('/api/mpesa/stkpush/query', async (req, res) => {
+app.post('/api/mpesa/stkpush/query', requireAuth, async (req, res) => {
   const { checkoutRequestId, userId } = req.body;
 
   if (!checkoutRequestId) {
@@ -263,42 +231,7 @@ app.post('/api/mpesa/stkpush/query', async (req, res) => {
 });
 
 
-/**
- * 8b. STK PUSH SIMULATE (Sandbox Only)
- * POST /api/mpesa/stk/simulate
- * Triggers a simulated C2B customer payment via Safaricom sandbox.
- * Use this to test callback flows without an actual mobile prompt.
- */
-app.post('/api/mpesa/stk/simulate', async (req, res) => {
-  const { msisdn, amount, billRefNumber, commandId, userId } = req.body;
 
-  if (!msisdn || !amount || !billRefNumber) {
-    return res.status(400).json({ error: 'Missing msisdn, amount, or billRefNumber parameter.' });
-  }
-
-  try {
-    const result = await initiateSTKSimulate({
-      msisdn,
-      amount: Number(amount),
-      billRefNumber,
-      commandId,
-      userId
-    });
-
-    if (!result.success) {
-      return res.status(400).json({
-        error: result.error || result.responseDescription,
-        responseCode: result.responseCode,
-        responseDescription: result.responseDescription
-      });
-    }
-
-    return res.json(result);
-  } catch (err: any) {
-    console.error('[STK Simulate Route Error]', err);
-    return res.status(500).json({ error: err.message || 'Internal Server Error' });
-  }
-});
 
 
 /**
@@ -415,7 +348,7 @@ app.post('/api/mpesa/callback', async (req, res) => {
  * 2. C2B V2 REGISTER URL / 3. C2B PAYBILL REGISTER URL
  * POST /api/mpesa/c2b/register
  */
-app.post('/api/mpesa/c2b/register', async (req, res) => {
+app.post('/api/mpesa/c2b/register', requireAuth, async (req, res) => {
   const { version, responseType, confirmationUrl, validationUrl } = req.body;
 
   if (!confirmationUrl || !validationUrl) {
@@ -448,6 +381,9 @@ app.post('/api/mpesa/c2b/register', async (req, res) => {
  * POST /api/mpesa/validate
  */
 app.post('/api/mpesa/validate', (req, res) => {
+  if (!validateWebhookToken(req)) {
+    return res.status(401).json({ error: 'Unauthorized webhook access' });
+  }
   console.log('[C2B Validation] Payload received:', req.body);
   // Safaricom validation URLs require returning validation approval format
   return res.json({
@@ -570,7 +506,7 @@ app.post('/api/mpesa/confirm', async (req, res) => {
  * 1. REVERSAL API
  * POST /api/mpesa/reversal
  */
-app.post('/api/mpesa/reversal', async (req, res) => {
+app.post('/api/mpesa/reversal', requireAuth, async (req, res) => {
   const { originalTransactionId, amount, receiverParty, identifierType, remarks, userId } = req.body;
 
   if (!originalTransactionId || !amount) {
@@ -598,7 +534,7 @@ app.post('/api/mpesa/reversal', async (req, res) => {
  * 4. TRANSACTION STATUS QUERY (ENTERPRISE IMPLEMENTATION)
  * POST /api/mpesa/transaction/status
  */
-app.post('/api/mpesa/transaction/status', async (req, res) => {
+app.post('/api/mpesa/transaction/status', requireAuth, async (req, res) => {
   const { transactionId, queryType, userId, remarks, occasion } = req.body;
 
   if (!transactionId || !queryType) {
@@ -712,7 +648,7 @@ app.post('/api/webhooks/reversal/timeout', async (req, res) => {
  * 5. ACCOUNT BALANCE QUERY
  * POST /api/mpesa/account/balance
  */
-app.post('/api/mpesa/account/balance', async (req, res) => {
+app.post('/api/mpesa/account/balance', requireAuth, async (req, res) => {
   const { userId, remarks } = req.body;
   try {
     const result = await initiateAccountBalance({ userId, remarks });
@@ -727,7 +663,7 @@ app.post('/api/mpesa/account/balance', async (req, res) => {
  * 6. B2C API
  * POST /api/mpesa/b2c
  */
-app.post('/api/mpesa/b2c', async (req, res) => {
+app.post('/api/mpesa/b2c', requireAuth, async (req, res) => {
   const { commandId, amount, phone, remarks, occasion } = req.body;
 
   if (!commandId || !amount || !phone) {
@@ -757,7 +693,7 @@ app.post('/api/mpesa/b2c', async (req, res) => {
  * 9. B2B PAYMENT REQUEST
  * POST /api/mpesa/b2b
  */
-app.post('/api/mpesa/b2b', async (req, res) => {
+app.post('/api/mpesa/b2b', requireAuth, async (req, res) => {
   const { commandId, receiverIdentifierType, amount, receiverParty, reference, remarks } = req.body;
 
   if (!commandId || !amount || !receiverParty || !reference) {
@@ -788,7 +724,7 @@ app.post('/api/mpesa/b2b', async (req, res) => {
  * 10. DYNAMIC QR CODE
  * POST /api/mpesa/qrcode
  */
-app.post('/api/mpesa/qrcode', async (req, res) => {
+app.post('/api/mpesa/qrcode', requireAuth, async (req, res) => {
   const { merchantName, refNo, amount, trxCode, size } = req.body;
 
   if (!merchantName || !refNo || !amount || !trxCode) {
@@ -815,7 +751,7 @@ app.post('/api/mpesa/qrcode', async (req, res) => {
  * 11. BILL MANAGER APIs
  * POST /api/mpesa/billmanager/:action
  */
-app.post('/api/mpesa/billmanager/:action', async (req, res) => {
+app.post('/api/mpesa/billmanager/:action', requireAuth, async (req, res) => {
   const { action } = req.params;
 
   try {
@@ -864,7 +800,7 @@ app.post('/api/mpesa/billmanager/:action', async (req, res) => {
  */
 
 // 12. Initiate B2B Merchant Payment
-app.post('/api/business-buy-goods', async (req, res) => {
+app.post('/api/business-buy-goods', requireAuth, async (req, res) => {
   const { receiverTill, amount, accountReference, remarks, occasion, requesterPhone, confirmationPassword, userId } = req.body;
 
   if (!receiverTill || !amount || !accountReference || !remarks) {
@@ -891,7 +827,7 @@ app.post('/api/business-buy-goods', async (req, res) => {
 });
 
 // 13. Retry B2B Merchant Payment
-app.post('/api/business-buy-goods/retry', async (req, res) => {
+app.post('/api/business-buy-goods/retry', requireAuth, async (req, res) => {
   const { transactionId, confirmationPassword, userId } = req.body;
 
   if (!transactionId) {
@@ -1011,7 +947,7 @@ app.post('/api/webhooks/business-buy-goods/timeout', async (req, res) => {
  */
 
 // 16. Initiate B2C Float Top Up
-app.post('/api/treasury/b2c-topup', async (req, res) => {
+app.post('/api/treasury/b2c-topup', requireAuth, async (req, res) => {
   const { destinationShortcode, amount, accountReference, remarks, requesterPhone, confirmationPassword, userId } = req.body;
 
   if (!destinationShortcode || !amount || !accountReference || !remarks) {
@@ -1037,7 +973,7 @@ app.post('/api/treasury/b2c-topup', async (req, res) => {
 });
 
 // 17. Retry B2C Float Top Up
-app.post('/api/treasury/b2c-topup/retry', async (req, res) => {
+app.post('/api/treasury/b2c-topup/retry', requireAuth, async (req, res) => {
   const { transactionId, confirmationPassword, userId } = req.body;
 
   if (!transactionId) {
@@ -1079,7 +1015,7 @@ app.post('/api/treasury/b2c-topup/retry', async (req, res) => {
 });
 
 // 18. Manual/Query Reconciliation for B2C Float Top Up
-app.post('/api/treasury/b2c-topup/reconcile', async (req, res) => {
+app.post('/api/treasury/b2c-topup/reconcile', requireAuth, async (req, res) => {
   const { topupId, action, externalTransactionId, actor } = req.body;
 
   if (!topupId || !action) {
@@ -1163,7 +1099,7 @@ app.post('/api/webhooks/b2c-topup/timeout', async (req, res) => {
 });
 
 // 21. Business to Pochi endpoints
-app.post('/api/business-to-pochi', async (req, res) => {
+app.post('/api/business-to-pochi', requireAuth, async (req, res) => {
   const { receiverPhone, amount, accountReference, remarks, occasion, requesterPhone, confirmationPassword, userId } = req.body;
 
   if (!receiverPhone || !amount || !accountReference || !remarks) {
@@ -1189,7 +1125,7 @@ app.post('/api/business-to-pochi', async (req, res) => {
   }
 });
 
-app.post('/api/business-to-pochi/retry', async (req, res) => {
+app.post('/api/business-to-pochi/retry', requireAuth, async (req, res) => {
   const { transactionId, confirmationPassword, userId } = req.body;
 
   if (!transactionId) {
@@ -1291,8 +1227,8 @@ app.post('/api/webhooks/business-to-pochi/timeout', async (req, res) => {
   }
 });
 
-const PORT = 5000;
-app.listen(PORT, '0.0.0.0', () => {
+const PORT = process.env.PORT || 5000;
+app.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`[Server] Express server running on port ${PORT}`);
 });
 

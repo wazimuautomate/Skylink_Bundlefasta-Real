@@ -115,8 +115,7 @@ export function TreasuryTopupPage() {
   const [reconciliationMessage, setReconciliationMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [processingReconciliation, setProcessingReconciliation] = useState(false);
 
-  // Connection diagnostics
-  const [connectionCheck, setConnectionCheck] = useState<{ status: 'idle' | 'checking' | 'connected' | 'error', message?: string }>({ status: 'idle' });
+
 
   // Account Balance Query State
   const [activeSubTab, setActiveSubTab] = useState<'history' | 'balanceSync'>('history');
@@ -224,10 +223,13 @@ export function TreasuryTopupPage() {
     setBalanceQuerySubmitting(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/mpesa/account/balance', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           userId: userData?.user?.id,
@@ -345,10 +347,13 @@ export function TreasuryTopupPage() {
     setIsSubmitting(true);
 
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/treasury/b2c-topup', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           destinationShortcode,
@@ -397,9 +402,14 @@ export function TreasuryTopupPage() {
 
     setIsSubmitting(true);
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const res = await fetch('/api/treasury/b2c-topup/retry', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           transactionId: tx.id,
           confirmationPassword: pin,
@@ -432,9 +442,14 @@ export function TreasuryTopupPage() {
     setReconciliationMessage(null);
 
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const res = await fetch('/api/treasury/b2c-topup/reconcile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           topupId: selectedTx.id,
           action: reconcileAction,
@@ -471,25 +486,7 @@ export function TreasuryTopupPage() {
     }
   };
 
-  // Run Connection Diagnostic
-  const handleConnectionDiagnostic = async () => {
-    setConnectionCheck({ status: 'checking' });
-    try {
-      const res = await fetch('/api/mpesa/test-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'oauth' })
-      });
-      const data = await res.json();
-      if (res.ok && data.access_token) {
-        setConnectionCheck({ status: 'connected', message: 'Safaricom Daraja API Connection Verified! Access token retrieved successfully.' });
-      } else {
-        throw new Error(data.error || 'Connection rejected by Daraja API.');
-      }
-    } catch (err: any) {
-      setConnectionCheck({ status: 'error', message: err.message || 'Failed to authenticate with Daraja.' });
-    }
-  };
+
 
   // Save Settings
   const handleSaveSettings = async () => {
@@ -618,14 +615,6 @@ export function TreasuryTopupPage() {
             Maintain utility payout balances and monitor liquidity across accounts.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button 
-            onClick={handleConnectionDiagnostic} 
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-panel hover:bg-brand-panel/80 text-brand-text text-sm font-medium border border-brand-border transition duration-200 cursor-pointer"
-          >
-            <Activity size={16} className={connectionCheck.status === 'checking' ? 'animate-spin' : ''} />
-            Diagnostic Check
-          </button>
           <button 
             onClick={() => setIsSettingsOpen(true)}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-panel hover:bg-brand-panel/80 text-brand-text text-sm font-medium border border-brand-border transition duration-200 cursor-pointer"
@@ -639,32 +628,9 @@ export function TreasuryTopupPage() {
           >
             <RefreshCw size={18} />
           </button>
-        </div>
       </div>
 
-      {/* DIAGNOSTIC ERROR / ALERT PANEL */}
-      {connectionCheck.status !== 'idle' && (
-        <div className={`p-4 rounded-xl border flex items-start gap-3 relative transition-all duration-300 ${
-          connectionCheck.status === 'connected' 
-            ? 'bg-status-success/10 border-status-success/30 text-status-success' 
-            : connectionCheck.status === 'checking'
-            ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
-            : 'bg-status-danger/10 border-status-danger/30 text-status-danger'
-        }`}>
-          {connectionCheck.status === 'connected' && <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
-          {connectionCheck.status === 'checking' && <RefreshCw className="w-5 h-5 shrink-0 mt-0.5 animate-spin" />}
-          {connectionCheck.status === 'error' && <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />}
-          <div className="flex-1">
-            <h5 className="font-semibold text-sm">
-              {connectionCheck.status === 'checking' ? 'Querying Safaricom Gateway...' : connectionCheck.status === 'connected' ? 'Diagnostic Success' : 'Diagnostic Error'}
-            </h5>
-            <p className="text-xs opacity-90 mt-1">{connectionCheck.message || 'Checking OAuth credentials authentication pipeline...'}</p>
-          </div>
-          <button onClick={() => setConnectionCheck({ status: 'idle' })} className="absolute top-3 right-3 opacity-60 hover:opacity-100 cursor-pointer">
-            <X size={16} />
-          </button>
-        </div>
-      )}
+
 
       {/* LEDGER & LIQUIDITY METRICS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

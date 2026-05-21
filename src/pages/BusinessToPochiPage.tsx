@@ -284,10 +284,13 @@ export function BusinessToPochiPage() {
     setIsSubmitting(true);
 
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/business-to-pochi', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           receiverPhone,
@@ -340,10 +343,13 @@ export function BusinessToPochiPage() {
 
     setIsSubmitting(true);
     try {
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/business-to-pochi/retry', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           transactionId: tx.id,

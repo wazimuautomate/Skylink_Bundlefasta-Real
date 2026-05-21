@@ -18,6 +18,7 @@ import { BusinessToPochiPage } from './pages/BusinessToPochiPage';
 import { useNavigation } from './components/NavigationContext';
 import { supabase } from './utils/supabaseClient';
 
+
 export default function App() {
   const { activePage } = useNavigation();
   const [session, setSession] = useState<any>(null);
@@ -86,7 +87,11 @@ export default function App() {
   }
 
   if (!session || !isKeywordVerified) {
-    return <LoginPage onLoginSuccess={() => setIsKeywordVerified(true)} />;
+    return (
+      <div className="relative w-full min-h-screen">
+        <LoginPage onLoginSuccess={() => setIsKeywordVerified(true)} />
+      </div>
+    );
   }
 
   return (
@@ -105,7 +110,10 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-4 md:p-8 z-0 pb-24 md:pb-8">
           {renderPage()}
         </div>
+
+
       </main>
     </div>
   );
 }
+

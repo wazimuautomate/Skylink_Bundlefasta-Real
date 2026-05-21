@@ -172,10 +172,13 @@ export function ReconciliationPage() {
     try {
       const { data: userData } = await supabase.auth.getUser();
       
+      const session = (await supabase.auth.getSession()).data.session;
+      const token = session?.access_token;
       const response = await fetch('/api/mpesa/transaction/status', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           transactionId: queryReceipt.trim().toUpperCase(),

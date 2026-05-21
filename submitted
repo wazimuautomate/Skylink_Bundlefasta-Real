@@ -1,8 +1,0 @@
-[feature/api-business-to-pochi 5ebb16e] feat: implement Business to Pochi API module (API 4) - validateBusinessToPochi.ts: per-tx limit, daily cap, cooldown, MSISDN normalization, password gate - initiateBusinessToPochi.ts: UUID idempotency, RSA cert encryption, queued- lifecycle, retry linkage - parseBusinessToPochiResult.ts: B2C callback param unpacker with date normalization - handleBusinessToPochiResult.ts: idempotency guard, double-entry ledger CREDIT, balance RPC, notifications - handleBusinessToPochiTimeout.ts: non-destructive timeout flag, pochi_audit_logs, alert notification - Express routes: POST /api/business-to-pochi, /retry, /webhooks/result, /webhooks/timeout - Frontend: BusinessToPochiPage.tsx with form, safety settings, 2 charts, realtime table, detail drawer - Sidebar + App.tsx: Business To Pochi nav item wired - CHANGELOG.md: v1.6.0-business-to-pochi entry added
- 10 files changed, 2007 insertions(+), 1 deletion(-)
- create mode 100644 src/pages/BusinessToPochiPage.tsx
- create mode 100644 src/server/services/businessToPochi/handleBusinessToPochiResult.ts
- create mode 100644 src/server/services/businessToPochi/handleBusinessToPochiTimeout.ts
- create mode 100644 src/server/services/businessToPochi/initiateBusinessToPochi.ts
- create mode 100644 src/server/services/businessToPochi/parseBusinessToPochiResult.ts
- create mode 100644 src/server/services/businessToPochi/validateBusinessToPochi.ts

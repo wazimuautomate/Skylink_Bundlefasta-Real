@@ -14,6 +14,23 @@
   --color-brand-muted: var(--muted);
   
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+
+  --animate-bounce-slow: bounce-slow 3s infinite;
+  --animate-fade-in: fade-in 0.25s ease-out;
+  --animate-slide-in: slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+
+  @keyframes bounce-slow {
+    0%, 100% { transform: translateY(-8%); }
+    50% { transform: translateY(0); }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes slide-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
 }
 
 :root {

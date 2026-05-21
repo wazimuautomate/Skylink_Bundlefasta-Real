@@ -1,6 +1,31 @@
 # Changelog: Skylink Bundlefasta
 
 All notable changes to this project will be documented in this file.
+## [1.9.0-contextual-help] - 2026-05-20
+### Added
+- Integrated the official `skylinkbfasta.png` brand logo at `/logo.png`, perfectly sizing and fitting it across the login page, desktop sidebar, and mobile header.
+- Implemented a **Full Contextual Help & Education System** across the entire dashboard to make the platform self-explaining.
+- **Central Knowledge Registry** at `src/system/help/data/helpKnowledgeMap.ts`:
+  - Structured documentation mapping every page, API route, Supabase table, and callback webhook in the system.
+  - Interactive **Transaction Lifecycle Maps** (STK Push, B2C payout, B2B payout, C2B Paybill, Reversal flow) detailing step-by-step actors, operations, and status outcomes.
+  - Interactive **Fintech Operating Academy** (12-chapter textbook) covering payments, webhooks, reconciliation, float, ledgers, security, and idempotency.
+  - Complete **Kenyan Fintech Glossary** explaining terms like STK Push, Pochi la Biashara, Working/Utility accounts, Webhooks, Idempotency, and Reversals in simple, accessible business language alongside technical meanings and risk ratings (Low/Medium/High).
+- **Core Engine & Context Providers**:
+  - `src/system/help/generators/helpEngine.ts`: Compiles contextual page metadata, mapping current routes to active database effects, related webhooks, and backend API endpoints dynamically.
+  - `src/system/help/context/HelpContext.tsx`: Manages open/close drawer visibility, tab selections, active glossary term views, and search query state. Provides custom hooks (`useHelpContext`, `usePageHelp`).
+- **Premium Retro-Arcade UI/UX Components**:
+  - `src/system/help/components/FloatingHelpButton.tsx`: A pulsing retro-gradient floating button in the bottom-right corner with a hoverable mini-dismiss trigger to hide the assistant for the current session.
+  - `src/system/help/components/HelpDrawer.tsx`: Sliding sidebar drawer containing tab-based contextual information, quick glossary search, and a brand status bar.
+  - `src/system/help/components/ExplainPagePanel.tsx`: Page describer splitting help into Simple Meaning, Business Purpose, Technical Definition, and Real-World Examples.
+  - `src/system/help/components/TransactionFlowDiagram.tsx`: Vertical progress sequence card diagram showing system state handshakes.
+  - `src/system/help/components/DatabaseSection.tsx`: Explains public Supabase table reads/writes, Express API endpoints, and C2B/B2C webhook callbacks.
+  - `src/system/help/components/SecurityRisksSection.tsx`: Highlight danger warnings for irreversible money transfers (Pochi, Tills, Reversals) and secret credentials encryption.
+  - `src/system/help/components/EducationMode.tsx`: Multi-chapter syllabus navigator allowing sequential reading of system mechanics.
+  - `src/system/help/components/SearchableHelp.tsx`: Real-time fuzzy glossary search displaying official definitions, simple business meaning, technical details, and color-coded risk indicators.
+- **Global Integration**:
+  - Wrapped client application with `HelpProvider` in `src/main.tsx`.
+  - Mounted `FloatingHelpButton` and `HelpDrawer` in `src/App.tsx` globally (accessible on both the main dashboard pages and the pre-auth Administrator Login screen).
+  - Integrated custom keyframes and animation utility tokens (`animate-slide-in`, `animate-fade-in`, `animate-bounce-slow`) into Tailwind v4 configuration in `src/index.css`.
 
 ## [1.8.0-stk-query] - 2026-05-20
 ### Added

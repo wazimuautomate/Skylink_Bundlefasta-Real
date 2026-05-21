@@ -21,11 +21,7 @@ export function SettingsPage() {
   // Store original config for comparison in audit logs
   const [originalConfig, setOriginalConfig] = useState<any>(null);
 
-  // Connection Test State
-  const [testAction, setTestAction] = useState('register_urls');
-  const [testPhone, setTestPhone] = useState('');
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ status: 'success' | 'error'; message: string; timestamp: string } | null>(null);
+
 
   const fetchSettings = async () => {
     try {
@@ -114,44 +110,7 @@ export function SettingsPage() {
     }
   };
 
-  const runConnectionTest = async () => {
-    setTesting(true);
-    setTestResult(null);
 
-    try {
-      const response = await fetch('/api/mpesa/test-connection', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: testAction,
-          phone: testPhone || undefined
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Connection test failed');
-      }
-
-      setTestResult({
-        status: 'success',
-        message: data.message || JSON.stringify(data, null, 2),
-        timestamp: new Date().toLocaleTimeString()
-      });
-    } catch (err: any) {
-      console.error(err);
-      setTestResult({
-        status: 'error',
-        message: err.message || 'An unexpected error occurred during the test.',
-        timestamp: new Date().toLocaleTimeString()
-      });
-    } finally {
-      setTesting(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -357,74 +316,7 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {/* Gateway Connection Test */}
-      <div className="bg-brand-panel border border-brand-border rounded-xl shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-brand-border bg-brand-bg/30 flex items-center gap-3">
-          <Shield className="text-brand-accent" size={20} />
-          <div>
-            <h3 className="font-semibold text-brand-text text-sm">Daraja Gateway Connection Test</h3>
-            <p className="text-xs text-brand-text/50">Run synchronous validation actions to verify connectivity and credential authentication</p>
-          </div>
-        </div>
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-brand-text/80 mb-1.5 uppercase tracking-wider">Test Action</label>
-              <select
-                value={testAction}
-                onChange={(e) => setTestAction(e.target.value)}
-                className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-brand-accent transition-all text-sm"
-              >
-                <option value="register_urls">Register Webhook URLs (C2B)</option>
-                <option value="stk_push">Initiate Test STK Push</option>
-                <option value="c2b_simulate">Simulate C2B Confirmation Webhook</option>
-                <option value="query_status">Query Transaction Status API</option>
-                <option value="b2c_payout">Simulate B2C Business-to-Customer Payout</option>
-                <option value="reversal">Simulate M-Pesa Transaction Reversal</option>
-              </select>
-            </div>
-            {['stk_push', 'c2b_simulate', 'b2c_payout'].includes(testAction) && (
-              <div>
-                <label className="block text-xs font-semibold text-brand-text/80 mb-1.5 uppercase tracking-wider">Test Phone Number</label>
-                <input
-                  type="text"
-                  placeholder="2547XXXXXXXX"
-                  value={testPhone}
-                  onChange={(e) => setTestPhone(e.target.value)}
-                  className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-brand-text focus:outline-none focus:border-brand-accent transition-all text-sm"
-                />
-              </div>
-            )}
-          </div>
 
-          <button
-            type="button"
-            disabled={testing}
-            onClick={runConnectionTest}
-            className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-brand-bg rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {testing ? (
-              <RefreshCw className="animate-spin" size={14} />
-            ) : (
-              'Run Connection Test'
-            )}
-          </button>
-
-          {testResult && (
-            <div className={`p-4 rounded-lg border text-sm font-mono whitespace-pre-wrap mt-4 ${
-              testResult.status === 'success'
-                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                : 'bg-rose-500/10 border-rose-500/20 text-status-danger'
-            }`}>
-              <div className="font-semibold mb-1 uppercase text-xs flex justify-between">
-                <span>{testResult.status}</span>
-                <span>{testResult.timestamp}</span>
-              </div>
-              <div>{testResult.message}</div>
-            </div>
-          )}
-        </div>
-      </div>
 
       <div className="flex justify-end gap-4 mt-6">
         <button 
