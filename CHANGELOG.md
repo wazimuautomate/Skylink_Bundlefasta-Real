@@ -5,6 +5,15 @@ All notable changes to the Skylink Bundlefasta Dashboard project will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [1.1.4] - 2026-05-30
+
+### Added
+- Redesigned the login page in [page.tsx](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/app/login/page.tsx) with a calm, premium visual glow layout featuring email, password, and admin keyword fields.
+- Implemented forgot-password flow linked to Supabase auth in [actions.ts](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/app/login/actions.ts).
+- Integrated the public brand logo image `logo.png` on the login card, laptop sidebar logo placeholder, and mobile header logo placeholder inside [Shell.tsx](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/components/layout/Shell.tsx).
+
+---
+
 ## [1.1.3] - 2026-05-30
 
 ### Fixed

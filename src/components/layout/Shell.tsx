@@ -103,8 +103,22 @@ export default function Shell({ activeTab, setActiveTab, children }: ShellProps)
         {/* Logo and App Title */}
         <div className="flex items-center justify-between p-5 border-b border-border-main">
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white font-bold text-sm shrink-0">
-              SL
+            <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center bg-panel border border-border-main shrink-0 relative">
+              <img 
+                src="/logo.png" 
+                alt="Logo" 
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                  if (target.nextElementSibling) {
+                    (target.nextElementSibling as HTMLElement).style.display = 'flex';
+                  }
+                }}
+              />
+              <div className="absolute inset-0 bg-panel flex items-center justify-center text-accent font-bold text-sm hidden">
+                SL
+              </div>
             </div>
             {!collapsed && (
               <span className="font-bold text-lg tracking-tight truncate">Skylink OS</span>
@@ -177,8 +191,22 @@ export default function Shell({ activeTab, setActiveTab, children }: ShellProps)
         {/* 2. TOP HEADER */}
         <header className="h-16 border-b border-border-main bg-panel flex items-center justify-between px-4 shrink-0 z-10">
           <div className="flex items-center gap-3">
-            <div className="md:hidden w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white font-bold text-sm shrink-0">
-              SL
+            <div className="md:hidden w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center bg-panel border border-border-main shrink-0 relative">
+              <img 
+                src="/logo.png" 
+                alt="Logo" 
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                  if (target.nextElementSibling) {
+                    (target.nextElementSibling as HTMLElement).style.display = 'flex';
+                  }
+                }}
+              />
+              <div className="absolute inset-0 bg-panel flex items-center justify-center text-accent font-bold text-sm hidden">
+                SL
+              </div>
             </div>
             <h1 className="font-bold text-lg md:text-xl tracking-tight capitalize">
               {menuItems.find(item => item.id === activeTab)?.name || activeTab}
