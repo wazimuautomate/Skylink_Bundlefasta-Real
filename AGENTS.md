@@ -2,6 +2,7 @@
 
 Welcome, AI Coding Agent. You are pair programming on the Skylink Bundlefasta Dashboard.
 You **must** read and adhere to this file every time before you modify any code or start a task in this workspace.
+The purpose of this dashboard is to serve as a secure, centralized operating system for managing, monitoring, analyzing, and controlling all money flowing into and out of your Safaricom PayBill across multiple products from a single mobile-friendly interface.
 
 ## CRITICAL RULES OF ENGAGEMENT
 

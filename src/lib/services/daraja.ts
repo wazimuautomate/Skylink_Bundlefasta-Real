@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
 interface DarajaConfig {
   consumerKey: string;
@@ -7,8 +9,84 @@ interface DarajaConfig {
   passKey: string;
   initiatorName: string;
   initiatorPassword?: string;
-  callbackUrlBase: string; // Base URL of the deployed app, e.g. https://my-app.vercel.app
+  certificate?: string;
+  callbackUrlBase: string;
   isSandbox: boolean;
+  stkCallbackUrl: string;
+  b2cResultUrl: string;
+  b2cTimeoutUrl: string;
+  reversalResultUrl: string;
+  reversalTimeoutUrl: string;
+  balanceResultUrl: string;
+  balanceTimeoutUrl: string;
+}
+
+// Function to load the RSA public key certificate from environment or local root filesystem
+function loadCertificate(isSandbox: boolean): string {
+  if (process.env.DARAJA_CERTIFICATE) {
+    return process.env.DARAJA_CERTIFICATE.trim();
+  }
+  
+  const certFilename = isSandbox ? 'SandboxCertificate.cer' : 'ProductionCertificate.cer';
+  const certPath = path.join(process.cwd(), certFilename);
+  
+  try {
+    if (fs.existsSync(certPath)) {
+      return fs.readFileSync(certPath, 'utf8').trim();
+    }
+  } catch (err) {
+    console.error(`[Daraja Security] Failed to read certificate at ${certPath}:`, err);
+  }
+  
+  return '';
+}
+
+// Function to encrypt Plain password to obtain the SecurityCredential parameter
+function encryptSecurityCredential(password: string, certificatePem?: string): string {
+  if (!password) return '';
+  if (!certificatePem) {
+    // If no certificate provided, fallback to raw password
+    return password;
+  }
+
+  try {
+    let formattedCert = certificatePem.trim();
+    if (!formattedCert.includes('-----BEGIN CERTIFICATE-----') && !formattedCert.includes('-----BEGIN PUBLIC KEY-----')) {
+      const cleanCert = formattedCert.replace(/\s+/g, '');
+      const chunks = cleanCert.match(/.{1,64}/g) || [];
+      formattedCert = `-----BEGIN CERTIFICATE-----\n${chunks.join('\n')}\n-----END CERTIFICATE-----`;
+    }
+
+    const buffer = Buffer.from(password);
+    const encrypted = crypto.publicEncrypt(
+      {
+        key: formattedCert,
+        padding: crypto.constants.RSA_PKCS1_PADDING,
+      },
+      buffer
+    );
+
+    return encrypted.toString('base64');
+  } catch (error) {
+    console.error('[Daraja Security] Failed to encrypt SecurityCredential:', error);
+    return password;
+  }
+}
+
+// Function to normalize mobile number to 12-digit format (2547XXXXXXXX or 2541XXXXXXXX)
+function normalizePesaPhone(input: string): string {
+  const value = input.trim().replace(/[^\d+]/g, "");
+
+  if (value.startsWith("+254")) {
+    return value.slice(1);
+  }
+  if (value.startsWith("254")) {
+    return value;
+  }
+  if (value.startsWith("0")) {
+    return `254${value.slice(1)}`;
+  }
+  return value;
 }
 
 const getEnvConfig = (): DarajaConfig | null => {
@@ -23,6 +101,9 @@ const getEnvConfig = (): DarajaConfig | null => {
     return null;
   }
 
+  const isSandbox = (process.env.DARAJA_ENVIRONMENT || process.env.DARAJA_ENV || 'sandbox').trim().toLowerCase() !== 'production';
+  const cert = loadCertificate(isSandbox);
+
   return {
     consumerKey,
     consumerSecret,
@@ -30,8 +111,16 @@ const getEnvConfig = (): DarajaConfig | null => {
     passKey,
     initiatorName,
     initiatorPassword: process.env.DARAJA_INITIATOR_PASSWORD || 'P@ssword123',
+    certificate: cert,
     callbackUrlBase,
-    isSandbox: process.env.DARAJA_ENVIRONMENT !== 'production',
+    isSandbox,
+    stkCallbackUrl: process.env.DARAJA_CALLBACK_URL || `${callbackUrlBase}/api/daraja/callback/stk`,
+    b2cResultUrl: process.env.DARAJA_B2C_RESULT_URL || `${callbackUrlBase}/api/daraja/callback/b2c`,
+    b2cTimeoutUrl: process.env.DARAJA_B2C_TIMEOUT_URL || `${callbackUrlBase}/api/daraja/callback/b2c-timeout`,
+    reversalResultUrl: process.env.DARAJA_REVERSAL_RESULT_URL || `${callbackUrlBase}/api/daraja/callback/reversal`,
+    reversalTimeoutUrl: process.env.DARAJA_REVERSAL_TIMEOUT_URL || `${callbackUrlBase}/api/daraja/callback/reversal-timeout`,
+    balanceResultUrl: process.env.DARAJA_BALANCE_RESULT_URL || `${callbackUrlBase}/api/daraja/callback/balance`,
+    balanceTimeoutUrl: process.env.DARAJA_BALANCE_TIMEOUT_URL || `${callbackUrlBase}/api/daraja/callback/balance-timeout`,
   };
 };
 
@@ -83,10 +172,7 @@ export class DarajaService {
     const config = getEnvConfig();
     const timestamp = getTimestamp();
 
-    const cleanPhone = params.phoneNumber.replace('+', '').trim();
-    const formattedPhone = cleanPhone.startsWith('0') 
-      ? `254${cleanPhone.slice(1)}` 
-      : cleanPhone;
+    const formattedPhone = normalizePesaPhone(params.phoneNumber);
 
     if (!config) {
       // Mock flow for testing
@@ -136,7 +222,7 @@ export class DarajaService {
       PartyA: formattedPhone,
       PartyB: config.shortCode,
       PhoneNumber: formattedPhone,
-      CallBackURL: `${config.callbackUrlBase}/api/daraja/callback/stk`,
+      CallBackURL: config.stkCallbackUrl,
       AccountReference: params.accountReference,
       TransactionDesc: params.description
     };
@@ -210,10 +296,7 @@ export class DarajaService {
     remarks: string;
   }) {
     const config = getEnvConfig();
-    const cleanPhone = params.phoneNumber.replace('+', '').trim();
-    const formattedPhone = cleanPhone.startsWith('0') 
-      ? `254${cleanPhone.slice(1)}` 
-      : cleanPhone;
+    const formattedPhone = normalizePesaPhone(params.phoneNumber);
 
     if (!config) {
       const conversationId = `B2C_CON_${crypto.randomBytes(8).toString('hex')}`;
@@ -250,16 +333,18 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+
     const payload = {
       InitiatorName: config.initiatorName,
-      SecurityCredential: config.initiatorPassword,
-      CommandID: 'PromotionPayment',
+      SecurityCredential: securityCredential,
+      CommandID: process.env.DARAJA_B2C_COMMAND_ID || 'PromotionPayment',
       Amount: params.amount,
       PartyA: config.shortCode,
       PartyB: formattedPhone,
       Remarks: params.remarks,
-      QueueTimeOutURL: `${config.callbackUrlBase}/api/daraja/callback/b2c-timeout`,
-      ResultURL: `${config.callbackUrlBase}/api/daraja/callback/b2c`,
+      QueueTimeOutURL: config.b2cTimeoutUrl,
+      ResultURL: config.b2cResultUrl,
       Occassion: 'SkylinkPayout'
     };
 
@@ -320,16 +405,18 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+
     const payload = {
       Initiator: config.initiatorName,
-      SecurityCredential: config.initiatorPassword,
+      SecurityCredential: securityCredential,
       CommandID: 'TransactionReversal',
       TransactionID: params.receiptNumber,
       Amount: params.amount,
       ReceiverParty: config.shortCode,
       RecieverIdentifierType: '11', // 11 is for shortcode under reversals
-      QueueTimeOutURL: `${config.callbackUrlBase}/api/daraja/callback/reversal-timeout`,
-      ResultURL: `${config.callbackUrlBase}/api/daraja/callback/reversal`,
+      QueueTimeOutURL: config.reversalTimeoutUrl,
+      ResultURL: config.reversalResultUrl,
       Remarks: params.reason,
       Occasion: 'SkylinkReversal'
     };
@@ -391,14 +478,16 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+
     const payload = {
       Initiator: config.initiatorName,
-      SecurityCredential: config.initiatorPassword,
+      SecurityCredential: securityCredential,
       CommandID: 'AccountBalance',
       PartyA: config.shortCode,
       IdentifierType: '4',
-      QueueTimeOutURL: `${config.callbackUrlBase}/api/daraja/callback/balance-timeout`,
-      ResultURL: `${config.callbackUrlBase}/api/daraja/callback/balance`,
+      QueueTimeOutURL: config.balanceTimeoutUrl,
+      ResultURL: config.balanceResultUrl,
       Remarks: 'Skylink Balance Check'
     };
 
