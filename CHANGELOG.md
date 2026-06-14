@@ -5,6 +5,15 @@ All notable changes to the Skylink Bundlefasta Dashboard project will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [1.9.0] - 2026-06-14
+
+### Changed
+- Changed the site metadata title and description from "Create Next App" to "Skylink Dashboard" in [layout.tsx](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/app/layout.tsx).
+- Disabled Webpack caching in [next.config.ts](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/next.config.ts) to prevent compilation caching race conditions / file locking errors in Windows build environments.
+
+### Fixed
+- Fixed drop down options visibility across all search filters, transactions, notifications, and settings views by explicitly setting the option text color and background color matching the active theme (light or dark mode) in [globals.css](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/app/globals.css).
+
 ## [1.8.0] - 2026-06-14
 
 ### Added
