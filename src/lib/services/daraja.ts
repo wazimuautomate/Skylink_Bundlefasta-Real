@@ -1,6 +1,5 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
+import { PRODUCTION_CERTIFICATE, SANDBOX_CERTIFICATE } from './certificates';
 
 interface DarajaConfig {
   consumerKey: string;
@@ -23,57 +22,55 @@ interface DarajaConfig {
   b2bTimeoutUrl: string;
 }
 
-// Function to load the RSA public key certificate from environment or local root filesystem
+/**
+ * Load the RSA public key certificate for Daraja SecurityCredential encryption.
+ *
+ * Resolution order:
+ *  1. DARAJA_CERTIFICATE env var — set this to override without redeploying.
+ *  2. Embedded certificate constant from certificates.ts — the default, works
+ *     everywhere (local, Vercel, Docker) with no filesystem dependency.
+ */
 function loadCertificate(isSandbox: boolean): string {
+  // 1. Env var override (useful for rotating certs without redeployment)
   if (process.env.DARAJA_CERTIFICATE) {
     const cert = process.env.DARAJA_CERTIFICATE.trim();
     if (!cert) {
       throw new Error('[Daraja Security] DARAJA_CERTIFICATE env var is set but empty. Provide a valid PEM certificate.');
     }
+    console.log('[Daraja Security] Using certificate from DARAJA_CERTIFICATE env var.');
     return cert;
   }
-  
-  const certFilename = isSandbox ? 'SandboxCertificate.cer' : 'ProductionCertificate.cer';
-  const certPath = path.join(process.cwd(), certFilename);
-  
-  try {
-    if (fs.existsSync(certPath)) {
-      const cert = fs.readFileSync(certPath, 'utf8').trim();
-      if (!cert) {
-        throw new Error(`[Daraja Security] Certificate file at ${certPath} is empty.`);
-      }
-      // Warn if the certificate appears to be expired (best-effort check using X509Certificate)
-      try {
-        const { X509Certificate } = crypto;
-        const x509 = new X509Certificate(cert);
-        const validTo = new Date(x509.validTo);
-        if (validTo < new Date()) {
-          console.error(
-            `[Daraja Security] ⚠️  CRITICAL: The certificate at ${certPath} EXPIRED on ${validTo.toISOString()}.` +
-            ` SecurityCredential encryption will be rejected by Safaricom.` +
-            ` Download the current ${isSandbox ? 'Sandbox' : 'Production'} certificate from the Daraja portal.`
-          );
-        } else {
-          const daysLeft = Math.floor((validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-          if (daysLeft < 30) {
-            console.warn(`[Daraja Security] ⚠️  Certificate expires in ${daysLeft} day(s). Renew soon.`);
-          }
-        }
-      } catch {
-        // X509Certificate parse failure is non-fatal — proceed with the cert as-is
-      }
-      return cert;
-    }
-  } catch (err: any) {
-    // Re-throw our own structured errors; wrap unexpected fs errors
-    if (err.message?.startsWith('[Daraja Security]')) throw err;
-    throw new Error(`[Daraja Security] Failed to read certificate at ${certPath}: ${err.message}`);
+
+  // 2. Embedded certificate bundled with the source code
+  const cert = (isSandbox ? SANDBOX_CERTIFICATE : PRODUCTION_CERTIFICATE).trim();
+  if (!cert) {
+    throw new Error('[Daraja Security] Embedded certificate constant is empty. Check src/lib/services/certificates.ts.');
   }
-  
-  throw new Error(
-    `[Daraja Security] Certificate file not found at ${certPath}. ` +
-    `Set the DARAJA_CERTIFICATE env var or place ${certFilename} in the project root.`
-  );
+
+  // Best-effort expiry check — logs a warning but does not block execution
+  try {
+    const x509 = new crypto.X509Certificate(cert);
+    const validTo = new Date(x509.validTo);
+    if (validTo < new Date()) {
+      console.error(
+        `[Daraja Security] ⚠️  CRITICAL: The embedded ${isSandbox ? 'Sandbox' : 'Production'} certificate` +
+        ` EXPIRED on ${validTo.toISOString()}.` +
+        ` SecurityCredential encryption will be rejected by Safaricom.` +
+        ` Update PRODUCTION_CERTIFICATE in src/lib/services/certificates.ts` +
+        ` or set the DARAJA_CERTIFICATE env var to the new PEM content.`
+      );
+    } else {
+      const daysLeft = Math.floor((validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      if (daysLeft < 30) {
+        console.warn(`[Daraja Security] ⚠️  Embedded certificate expires in ${daysLeft} day(s). Renew soon.`);
+      }
+    }
+  } catch {
+    // X509Certificate parse failure is non-fatal — proceed with the cert as-is
+  }
+
+  console.log(`[Daraja Security] Using embedded ${isSandbox ? 'sandbox' : 'production'} certificate from certificates.ts.`);
+  return cert;
 }
 
 // Function to encrypt the Initiator Password to obtain the SecurityCredential parameter.

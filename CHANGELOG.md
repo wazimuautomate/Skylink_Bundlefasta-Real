@@ -5,6 +5,15 @@ All notable changes to the Skylink Bundlefasta Dashboard project will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [1.12.2] - 2026-06-14
+
+### Changed
+- **[Daraja Cert Loading] Eliminate filesystem dependency — embed certificate in source code:**
+  - **New file:** [`src/lib/services/certificates.ts`](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/lib/services/certificates.ts) — exports `PRODUCTION_CERTIFICATE` and `SANDBOX_CERTIFICATE` as TypeScript string constants, so the PEM content is bundled directly with the compiled code.
+  - **Updated:** [`src/lib/services/daraja.ts`](file:///c:/Users/ADMIN/OneDrive/Desktop/Skylink-Bundlefasta-main/src/lib/services/daraja.ts) — `loadCertificate()` now resolves certificates in this order: ① `DARAJA_CERTIFICATE` env var (override/rotation), ② embedded constant from `certificates.ts` (default, always works). The `fs` and `path` imports have been removed.
+  - **Why:** Removed all filesystem path dependency (no more `process.cwd()` → `/var/task/` mismatch on Vercel serverless). The certificate is a **public key** so embedding it in source is safe and idiomatic.
+  - **To update cert:** Replace `PRODUCTION_CERTIFICATE` in `certificates.ts` with the new PEM content from the Safaricom Daraja portal, or set `DARAJA_CERTIFICATE` env var for zero-downtime rotation.
+
 ## [1.12.1] - 2026-06-14
 
 ### Fixed
