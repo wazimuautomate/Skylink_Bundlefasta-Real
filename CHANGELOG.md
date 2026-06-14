@@ -5,6 +5,18 @@ All notable changes to the Skylink Bundlefasta Dashboard project will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning.
 
+## [1.12.0] - 2026-06-14
+
+### Fixed
+- **[CRITICAL] M-Pesa Account Balance API — `ResultCode: 2001` fix in `src/lib/services/daraja.ts`:**
+  - **Root cause #1 (Certificate):** Diagnosed that `ProductionCertificate.cer` in the repository expired on **March 21, 2018** (over 7 years ago). Added a runtime certificate expiry check using `crypto.X509Certificate` in `loadCertificate()` that logs a `CRITICAL` error to the console whenever an expired certificate is detected, clearly identifying the file path and expiry date, and instructing the operator to download the current certificate from the Daraja portal.
+  - **Root cause #2 (Silent encryption fallback):** Removed the dangerous `catch` block in `encryptSecurityCredential()` that silently returned the raw plaintext `initiatorPassword` as the `SecurityCredential` when RSA encryption failed. The function now **throws a descriptive error** on any encryption failure, preventing any API call from ever proceeding with an unencrypted credential. This was the hidden bug causing `ResultCode: 2001` / "The initiator information is invalid" rejections.
+  - **Root cause #3 (Missing password validation):** Removed the dangerous `|| 'P@ssword123'` default for `DARAJA_INITIATOR_PASSWORD` in `getEnvConfig()`. If the env var is not set, the function now returns `null` (triggering mock mode with a console error) instead of silently sending a wrong password to Safaricom.
+  - **Root cause #4 (Cert loading silent failure):** `loadCertificate()` previously returned an empty string `''` when the certificate file was missing or unreadable. `encryptSecurityCredential()` then skipped encryption entirely (due to `!certificatePem` check) and returned the raw password. Both functions now **throw descriptive errors** that include the expected file path and instructions for resolution.
+  - **Payload logging:** Added detailed pre-request logging to `queryAccountBalance()`, `initiateB2c()`, `requestReversal()`, and `initiateB2b()`. The `SecurityCredential` is masked (first 20 chars only) in logs for security while still being useful for debugging. The Account Balance response body is also fully logged.
+  - **DarajaConfig interface:** Made `certificate` and `initiatorPassword` required fields (removing `?` optional markers) to enforce correct typing and allow removal of all `!` non-null assertions internally.
+  - **Environment startup log:** `getEnvConfig()` now logs the active environment (SANDBOX vs PRODUCTION), shortcode, and initiator name on every initialization for easy audit trail.
+
 ## [1.11.0] - 2026-06-14
 
 ### Changed

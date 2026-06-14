@@ -8,8 +8,8 @@ interface DarajaConfig {
   shortCode: string;
   passKey: string;
   initiatorName: string;
-  initiatorPassword?: string;
-  certificate?: string;
+  initiatorPassword: string;
+  certificate: string;
   callbackUrlBase: string;
   isSandbox: boolean;
   stkCallbackUrl: string;
@@ -26,7 +26,11 @@ interface DarajaConfig {
 // Function to load the RSA public key certificate from environment or local root filesystem
 function loadCertificate(isSandbox: boolean): string {
   if (process.env.DARAJA_CERTIFICATE) {
-    return process.env.DARAJA_CERTIFICATE.trim();
+    const cert = process.env.DARAJA_CERTIFICATE.trim();
+    if (!cert) {
+      throw new Error('[Daraja Security] DARAJA_CERTIFICATE env var is set but empty. Provide a valid PEM certificate.');
+    }
+    return cert;
   }
   
   const certFilename = isSandbox ? 'SandboxCertificate.cer' : 'ProductionCertificate.cer';
@@ -34,31 +38,67 @@ function loadCertificate(isSandbox: boolean): string {
   
   try {
     if (fs.existsSync(certPath)) {
-      return fs.readFileSync(certPath, 'utf8').trim();
+      const cert = fs.readFileSync(certPath, 'utf8').trim();
+      if (!cert) {
+        throw new Error(`[Daraja Security] Certificate file at ${certPath} is empty.`);
+      }
+      // Warn if the certificate appears to be expired (best-effort check using X509Certificate)
+      try {
+        const { X509Certificate } = crypto;
+        const x509 = new X509Certificate(cert);
+        const validTo = new Date(x509.validTo);
+        if (validTo < new Date()) {
+          console.error(
+            `[Daraja Security] ⚠️  CRITICAL: The certificate at ${certPath} EXPIRED on ${validTo.toISOString()}.` +
+            ` SecurityCredential encryption will be rejected by Safaricom.` +
+            ` Download the current ${isSandbox ? 'Sandbox' : 'Production'} certificate from the Daraja portal.`
+          );
+        } else {
+          const daysLeft = Math.floor((validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+          if (daysLeft < 30) {
+            console.warn(`[Daraja Security] ⚠️  Certificate expires in ${daysLeft} day(s). Renew soon.`);
+          }
+        }
+      } catch {
+        // X509Certificate parse failure is non-fatal — proceed with the cert as-is
+      }
+      return cert;
     }
-  } catch (err) {
-    console.error(`[Daraja Security] Failed to read certificate at ${certPath}:`, err);
+  } catch (err: any) {
+    // Re-throw our own structured errors; wrap unexpected fs errors
+    if (err.message?.startsWith('[Daraja Security]')) throw err;
+    throw new Error(`[Daraja Security] Failed to read certificate at ${certPath}: ${err.message}`);
   }
   
-  return '';
+  throw new Error(
+    `[Daraja Security] Certificate file not found at ${certPath}. ` +
+    `Set the DARAJA_CERTIFICATE env var or place ${certFilename} in the project root.`
+  );
 }
 
-// Function to encrypt Plain password to obtain the SecurityCredential parameter
-function encryptSecurityCredential(password: string, certificatePem?: string): string {
-  if (!password) return '';
+// Function to encrypt the Initiator Password to obtain the SecurityCredential parameter.
+// Uses RSA PKCS#1 v1.5 padding as required by Safaricom Daraja API.
+// IMPORTANT: Throws on failure — never falls back to plaintext, which would be silently rejected by Safaricom.
+function encryptSecurityCredential(password: string, certificatePem: string): string {
+  if (!password) {
+    throw new Error('[Daraja Security] Initiator password is empty. Set DARAJA_INITIATOR_PASSWORD.');
+  }
   if (!certificatePem) {
-    // If no certificate provided, fallback to raw password
-    return password;
+    throw new Error(
+      '[Daraja Security] No certificate provided for SecurityCredential encryption. ' +
+      'Ensure DARAJA_CERTIFICATE env var is set or the certificate file exists in the project root.'
+    );
+  }
+
+  let formattedCert = certificatePem.trim();
+  // Auto-wrap raw base64 content into a proper PEM envelope if needed
+  if (!formattedCert.includes('-----BEGIN CERTIFICATE-----') && !formattedCert.includes('-----BEGIN PUBLIC KEY-----')) {
+    const cleanCert = formattedCert.replace(/\s+/g, '');
+    const chunks = cleanCert.match(/.{1,64}/g) || [];
+    formattedCert = `-----BEGIN CERTIFICATE-----\n${chunks.join('\n')}\n-----END CERTIFICATE-----`;
   }
 
   try {
-    let formattedCert = certificatePem.trim();
-    if (!formattedCert.includes('-----BEGIN CERTIFICATE-----') && !formattedCert.includes('-----BEGIN PUBLIC KEY-----')) {
-      const cleanCert = formattedCert.replace(/\s+/g, '');
-      const chunks = cleanCert.match(/.{1,64}/g) || [];
-      formattedCert = `-----BEGIN CERTIFICATE-----\n${chunks.join('\n')}\n-----END CERTIFICATE-----`;
-    }
-
     const buffer = Buffer.from(password);
     const encrypted = crypto.publicEncrypt(
       {
@@ -67,11 +107,13 @@ function encryptSecurityCredential(password: string, certificatePem?: string): s
       },
       buffer
     );
-
     return encrypted.toString('base64');
-  } catch (error) {
-    console.error('[Daraja Security] Failed to encrypt SecurityCredential:', error);
-    return password;
+  } catch (error: any) {
+    // Do NOT fall back to raw password — Safaricom always rejects unencrypted credentials
+    throw new Error(
+      `[Daraja Security] RSA encryption of SecurityCredential failed: ${error.message}. ` +
+      `Verify the certificate is valid, not expired, and matches the environment (Sandbox vs Production).`
+    );
   }
 }
 
@@ -117,14 +159,26 @@ const getEnvConfig = (): DarajaConfig | null => {
   const shortCode = process.env.DARAJA_SHORTCODE;
   const passKey = process.env.DARAJA_PASSKEY;
   const initiatorName = process.env.DARAJA_INITIATOR_NAME;
+  const initiatorPassword = process.env.DARAJA_INITIATOR_PASSWORD;
   const callbackUrlBase = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
   
   if (!consumerKey || !consumerSecret || !shortCode || !passKey || !initiatorName) {
     return null;
   }
 
+  // If initiatorPassword is not set, return null to trigger mock mode (same as no config)
+  // rather than using a dangerous default that would silently fail against Safaricom
+  if (!initiatorPassword) {
+    console.error('[Daraja] DARAJA_INITIATOR_PASSWORD is not set. Cannot generate SecurityCredential. Falling back to mock mode.');
+    return null;
+  }
+
   const isSandbox = (process.env.DARAJA_ENVIRONMENT || process.env.DARAJA_ENV || 'sandbox').trim().toLowerCase() !== 'production';
+
+  // loadCertificate now throws descriptively if cert is missing, empty, or unreadable
   const cert = loadCertificate(isSandbox);
+
+  console.log(`[Daraja] Initialized in ${isSandbox ? 'SANDBOX' : 'PRODUCTION'} mode. ShortCode: ${shortCode}, Initiator: ${initiatorName}`);
 
   return {
     consumerKey,
@@ -132,7 +186,7 @@ const getEnvConfig = (): DarajaConfig | null => {
     shortCode,
     passKey,
     initiatorName,
-    initiatorPassword: process.env.DARAJA_INITIATOR_PASSWORD || 'P@ssword123',
+    initiatorPassword,
     certificate: cert,
     callbackUrlBase,
     isSandbox,
@@ -371,7 +425,8 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
-    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+    // encryptSecurityCredential now throws on failure — no silent plaintext fallback
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate!);
 
     const originatorConversationId = `B2C_ORI_${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
 
@@ -388,6 +443,11 @@ export class DarajaService {
       Occasion: 'SkylinkPayout',
       OriginatorConversationID: originatorConversationId
     };
+
+    console.log('[Daraja B2C] Sending B2C Payment request:', JSON.stringify({
+      ...payload,
+      SecurityCredential: `${securityCredential.substring(0, 20)}...[masked]`,
+    }));
 
     const res = await fetch(`${baseUrl}/mpesa/b2c/v3/paymentrequest`, {
       method: 'POST',
@@ -450,7 +510,8 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
-    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+    // encryptSecurityCredential now throws on failure — no silent plaintext fallback
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate!);
 
     const payload = {
       Initiator: config.initiatorName,
@@ -465,6 +526,11 @@ export class DarajaService {
       Remarks: params.reason,
       Occasion: 'SkylinkReversal'
     };
+
+    console.log('[Daraja Reversal] Sending Reversal request:', JSON.stringify({
+      ...payload,
+      SecurityCredential: `${securityCredential.substring(0, 20)}...[masked]`,
+    }));
 
     const res = await fetch(`${baseUrl}/mpesa/reversal/v1/request`, {
       method: 'POST',
@@ -523,7 +589,8 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
-    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+    // encryptSecurityCredential now throws on failure — no silent plaintext fallback
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate!);
 
     const payload = {
       Initiator: config.initiatorName,
@@ -536,6 +603,16 @@ export class DarajaService {
       Remarks: 'Skylink Balance Check'
     };
 
+    // Log the outgoing payload for debugging (SecurityCredential masked to protect sensitive data)
+    console.log('[Daraja Balance] Sending Account Balance request:', JSON.stringify({
+      ...payload,
+      SecurityCredential: `${securityCredential.substring(0, 20)}...[masked]`,
+    }));
+    console.log('[Daraja Balance] Environment:', config.isSandbox ? 'SANDBOX' : 'PRODUCTION');
+    console.log('[Daraja Balance] API URL:', `${baseUrl}/mpesa/accountbalance/v1/query`);
+    console.log('[Daraja Balance] Result URL:', config.balanceResultUrl);
+    console.log('[Daraja Balance] Timeout URL:', config.balanceTimeoutUrl);
+
     const res = await fetch(`${baseUrl}/mpesa/accountbalance/v1/query`, {
       method: 'POST',
       headers: {
@@ -545,12 +622,28 @@ export class DarajaService {
       body: JSON.stringify(payload),
     });
 
+    const responseText = await res.text();
+    console.log('[Daraja Balance] Raw API response:', responseText);
+
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Daraja Balance Query failed: ${errText}`);
+      throw new Error(`Daraja Balance Query failed (HTTP ${res.status}): ${responseText}`);
     }
 
-    return await res.json();
+    let responseData: any;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      throw new Error(`Daraja Balance Query returned non-JSON response: ${responseText}`);
+    }
+
+    // Log Daraja's acceptance/rejection codes immediately
+    if (responseData.ResponseCode && responseData.ResponseCode !== '0') {
+      console.error('[Daraja Balance] Request REJECTED by Daraja:', responseData);
+    } else {
+      console.log('[Daraja Balance] Request accepted. ConversationID:', responseData.ConversationID);
+    }
+
+    return responseData;
   }
 
   // --- 6. B2B Settlement Payout ---
@@ -600,7 +693,8 @@ export class DarajaService {
     const token = await this.getOAuthToken(config);
     const baseUrl = config.isSandbox ? 'https://sandbox.safaricom.co.ke' : 'https://api.safaricom.co.ke';
 
-    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate);
+    // encryptSecurityCredential now throws on failure — no silent plaintext fallback
+    const securityCredential = encryptSecurityCredential(config.initiatorPassword || '', config.certificate!);
 
     const payload = {
       Initiator: config.initiatorName,
@@ -616,6 +710,11 @@ export class DarajaService {
       QueueTimeOutURL: config.b2bTimeoutUrl,
       ResultURL: config.b2bResultUrl,
     };
+
+    console.log('[Daraja B2B] Sending B2B Payment request:', JSON.stringify({
+      ...payload,
+      SecurityCredential: `${securityCredential.substring(0, 20)}...[masked]`,
+    }));
 
     const res = await fetch(`${baseUrl}/mpesa/b2b/v1/paymentrequest`, {
       method: 'POST',
