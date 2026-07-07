@@ -373,7 +373,7 @@ export default function SettlementView() {
                 </span>
               </div>
               <p className="text-[10px] text-muted-main mb-4">
-                Operates with pre-flight balance verification and requires operator security PIN authorization.
+                Checks your last known balance where available; M-Pesa performs the final funds verification. Requires operator security PIN authorization.
               </p>
 
               <form onSubmit={handleInitiateSubmit} className="space-y-4">

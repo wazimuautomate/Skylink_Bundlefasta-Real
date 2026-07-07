@@ -472,24 +472,39 @@ export async function initiateB2bAction(params: {
   const adminSupabase = createAdminClient();
 
   try {
-    // 2. Fetch latest balance snapshot to check funds availability
+    // 2. Best-effort pre-flight balance check.
+    //
+    // balance_snapshots only reflects the last Account Balance callback and is 0
+    // when that has never populated. A 0 / missing snapshot means "unknown", NOT
+    // "empty" — so we only block when we actually have a POSITIVE known balance
+    // that is smaller than the requested amount. Otherwise we proceed and let
+    // Safaricom validate: M-Pesa rejects a genuinely underfunded transfer and the
+    // reason is recorded on the b2b_request and shown in the settlement history.
     const { data: balanceData } = await adminSupabase
       .from('balance_snapshots')
-      .select('balance')
+      .select('balance, fetched_at')
       .order('fetched_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    const currentBalance = balanceData?.balance || 0;
-    if (currentBalance < params.amount) {
+    const currentBalance = Number(balanceData?.balance || 0);
+    if (currentBalance > 0 && currentBalance < params.amount) {
       await logAudit('B2B_SETTLEMENT_BLOCKED_INSUFFICIENT_BALANCE', {
         amount: params.amount,
         balance: currentBalance,
       });
       return {
         success: false,
-        error: `Insufficient funds. Current balance is KES ${currentBalance.toLocaleString()}. Requested settlement is KES ${params.amount.toLocaleString()}.`,
+        error: `Insufficient funds. Last known balance is KES ${currentBalance.toLocaleString()}, but the requested settlement is KES ${params.amount.toLocaleString()}. Refresh your balance and try again.`,
       };
+    }
+
+    if (currentBalance <= 0) {
+      // Balance not known locally — don't block; rely on M-Pesa's own validation.
+      await logAudit('B2B_SETTLEMENT_BALANCE_UNVERIFIED', {
+        amount: params.amount,
+        note: 'No positive local balance snapshot; proceeding with M-Pesa as source of truth.',
+      });
     }
 
     // 3. Create database record FIRST (PENDING state)
