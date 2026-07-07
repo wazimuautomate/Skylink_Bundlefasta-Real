@@ -75,10 +75,14 @@ export async function POST(req: Request) {
       });
     }
 
-    // Trigger settlement rules calculation
+    // Trigger settlement split rules (dispatches B2B for matching active rules)
     if (transaction && transaction.id) {
-      await triggerSettlementRule(transaction.id, transaction.account_reference, transaction.amount);
-      
+      await triggerSettlementRule(transaction.id, transaction.account_reference, transaction.amount, {
+        direction: 'IN',
+        sourceSystem: transaction.source_system,
+        module: transaction.module,
+      });
+
       // If transaction is from Pesatrix, notify the Pesatrix application
       if (transaction.source_system === 'pesatrix') {
         triggerPesatrixWebhookForTransaction(transaction.id).catch(err => {

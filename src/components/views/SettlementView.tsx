@@ -16,7 +16,10 @@ import {
   AlertCircle,
   ChevronRight,
   Activity,
-  Layers
+  Layers,
+  Pencil,
+  Power,
+  X
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -25,6 +28,7 @@ import {
   getB2bRequestsAction,
   getSettlementRulesAction,
   createSettlementRuleAction,
+  updateSettlementRuleAction,
   deleteSettlementRuleAction,
   getSettlementQueueAction
 } from '@/app/actions';
@@ -76,6 +80,7 @@ export default function SettlementView() {
   const [ruleFixedAmount, setRuleFixedAmount] = useState('');
   const [ruleDestType, setRuleDestType] = useState<'Till' | 'PayBill'>('Till');
   const [ruleDestShortcode, setRuleDestShortcode] = useState('');
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
   // 4. UI Indicators
   const [loading, setLoading] = useState(false);
@@ -174,11 +179,29 @@ export default function SettlementView() {
     }
   };
 
-  // Create Settlement Rule
+  const resetRuleForm = () => {
+    setEditingRuleId(null);
+    setRuleSource('');
+    setRuleType('PERCENTAGE');
+    setRulePercent('');
+    setRuleFixedAmount('');
+    setRuleDestType('Till');
+    setRuleDestShortcode('');
+  };
+
+  // Create or Update Settlement Rule
   const handleCreateRuleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ruleSource || !ruleDestShortcode) {
       setRuleErrorMsg('Please fill in all required rule fields.');
+      return;
+    }
+    if (ruleType === 'PERCENTAGE' && (!rulePercent || Number(rulePercent) <= 0)) {
+      setRuleErrorMsg('Please enter a valid percentage.');
+      return;
+    }
+    if (ruleType === 'FIXED' && (!ruleFixedAmount || Number(ruleFixedAmount) <= 0)) {
+      setRuleErrorMsg('Please enter a valid fixed amount.');
       return;
     }
 
@@ -187,7 +210,7 @@ export default function SettlementView() {
     setRuleErrorMsg(null);
 
     try {
-      const newRule = {
+      const ruleData = {
         source_reference: ruleSource,
         rule_type: ruleType,
         percentage: ruleType === 'PERCENTAGE' ? Number(rulePercent) : null,
@@ -196,19 +219,43 @@ export default function SettlementView() {
         destination_type: ruleDestType
       };
 
-      await createSettlementRuleAction(newRule);
-      setRuleSuccessMsg(`Settlement rule for ${ruleSource.toUpperCase()} created successfully.`);
-      
-      // Reset form
-      setRuleSource('');
-      setRulePercent('');
-      setRuleFixedAmount('');
-      setRuleDestShortcode('');
+      if (editingRuleId) {
+        await updateSettlementRuleAction(editingRuleId, ruleData);
+        setRuleSuccessMsg(`Settlement rule for ${ruleSource.toUpperCase()} updated successfully.`);
+      } else {
+        await createSettlementRuleAction(ruleData);
+        setRuleSuccessMsg(`Settlement rule for ${ruleSource.toUpperCase()} created successfully.`);
+      }
+
+      resetRuleForm();
       loadAllData();
     } catch (err: any) {
-      setRuleErrorMsg(err.message || 'Failed to create settlement rule.');
+      setRuleErrorMsg(err.message || 'Failed to save settlement rule.');
     } finally {
       setRuleLoading(false);
+    }
+  };
+
+  // Load an existing rule into the form for editing
+  const handleEditRule = (rule: any) => {
+    setEditingRuleId(rule.id);
+    setRuleSource(rule.source_reference || '');
+    setRuleType(rule.rule_type === 'FIXED' ? 'FIXED' : 'PERCENTAGE');
+    setRulePercent(rule.percentage != null ? String(rule.percentage) : '');
+    setRuleFixedAmount(rule.fixed_amount != null ? String(rule.fixed_amount) : '');
+    setRuleDestType(rule.destination_type === 'PayBill' ? 'PayBill' : 'Till');
+    setRuleDestShortcode(rule.destination_shortcode || '');
+    setRuleSuccessMsg(null);
+    setRuleErrorMsg(null);
+  };
+
+  // Enable / disable a rule without deleting it
+  const handleToggleActive = async (rule: any) => {
+    try {
+      await updateSettlementRuleAction(rule.id, { active: !rule.active });
+      loadAllData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update rule status.');
     }
   };
 
@@ -216,6 +263,7 @@ export default function SettlementView() {
   const handleDeleteRule = async (id: string) => {
     if (!confirm('Are you sure you want to delete this settlement rule?')) return;
     try {
+      if (editingRuleId === id) resetRuleForm();
       await deleteSettlementRuleAction(id);
       loadAllData();
     } catch (err: any) {
@@ -514,12 +562,23 @@ export default function SettlementView() {
           <>
             {/* Create Rule Form */}
             <div className="bg-panel border border-border-main rounded-xl p-5 shadow-sm lg:col-span-1 h-fit">
-              <div className="flex items-center gap-2 mb-2">
-                <Plus size={18} className="text-warning-main" />
-                <h3 className="font-bold text-sm">Add Settlement Rule</h3>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  {editingRuleId ? <Pencil size={18} className="text-warning-main" /> : <Plus size={18} className="text-warning-main" />}
+                  <h3 className="font-bold text-sm">{editingRuleId ? 'Edit Settlement Rule' : 'Add Settlement Rule'}</h3>
+                </div>
+                {editingRuleId && (
+                  <button
+                    type="button"
+                    onClick={resetRuleForm}
+                    className="text-[10px] font-semibold text-muted-main hover:text-text-main inline-flex items-center gap-1"
+                  >
+                    <X size={12} /> Cancel
+                  </button>
+                )}
               </div>
               <p className="text-[10px] text-muted-main mb-4">
-                Define splitting rules for successful incoming STK and C2B payments.
+                Define automatic B2B split rules for successful incoming payments (STK, C2B, and Pesatrix/BingwaOne webhooks). When an incoming payment matches the source reference, the calculated amount is automatically sent to the destination via B2B.
               </p>
 
               <form onSubmit={handleCreateRuleSubmit} className="space-y-4">
@@ -662,8 +721,10 @@ export default function SettlementView() {
                   disabled={ruleLoading}
                   className="w-full flex items-center justify-center gap-2 py-2.5 bg-text-main text-panel hover:opacity-90 disabled:opacity-50 font-semibold text-xs rounded-lg shadow-sm transition-all active:scale-[0.98]"
                 >
-                  <Plus size={14} />
-                  {ruleLoading ? 'Adding Rule...' : 'Save Settlement Rule'}
+                  {editingRuleId ? <Pencil size={14} /> : <Plus size={14} />}
+                  {ruleLoading
+                    ? (editingRuleId ? 'Updating Rule...' : 'Adding Rule...')
+                    : (editingRuleId ? 'Update Settlement Rule' : 'Save Settlement Rule')}
                 </button>
               </form>
             </div>
@@ -721,13 +782,33 @@ export default function SettlementView() {
                             </span>
                           </td>
                           <td className="py-3 px-3 text-right">
-                            <button
-                              onClick={() => handleDeleteRule(rule.id)}
-                              className="text-danger hover:text-danger/80 p-1.5 rounded-lg hover:bg-danger/10 transition-colors inline-flex items-center"
-                              title="Delete Rule"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <div className="inline-flex items-center gap-1 justify-end">
+                              <button
+                                onClick={() => handleToggleActive(rule)}
+                                className={`p-1.5 rounded-lg transition-colors inline-flex items-center ${
+                                  rule.active
+                                    ? 'text-success-main hover:bg-success-main/10'
+                                    : 'text-muted-main hover:bg-muted-main/10'
+                                }`}
+                                title={rule.active ? 'Disable Rule' : 'Enable Rule'}
+                              >
+                                <Power size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleEditRule(rule)}
+                                className="text-warning-main hover:text-warning-main/80 p-1.5 rounded-lg hover:bg-warning-main/10 transition-colors inline-flex items-center"
+                                title="Edit Rule"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteRule(rule.id)}
+                                className="text-danger hover:text-danger/80 p-1.5 rounded-lg hover:bg-danger/10 transition-colors inline-flex items-center"
+                                title="Delete Rule"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -746,7 +827,7 @@ export default function SettlementView() {
               <h3 className="font-bold text-sm flex items-center gap-1.5">
                 <Layers size={16} /> Settlement Queue
               </h3>
-              <p className="text-xs text-muted-main">Generated payouts stored in the queue (automation engine preview)</p>
+              <p className="text-xs text-muted-main">Auto-dispatched B2B splits generated by active settlement rules</p>
             </div>
 
             <div className="flex-grow overflow-y-auto">
@@ -799,9 +880,15 @@ export default function SettlementView() {
                                   ? 'text-warning-main bg-warning-main/10'
                                   : 'text-danger bg-danger/10'
                             }`}>
-                              {item.status} (Calculated Only)
+                              {item.status}
                             </span>
-                            <p className="text-[8px] text-muted-main mt-0.5 leading-tight">Infrastructure preview - not dispatched yet</p>
+                            <p className="text-[8px] text-muted-main mt-0.5 leading-tight">
+                              {item.status === 'PROCESSED'
+                                ? 'Dispatched via B2B settlement'
+                                : item.status === 'FAILED'
+                                  ? 'B2B dispatch failed — check settlement history'
+                                  : 'Awaiting B2B dispatch'}
+                            </p>
                           </td>
                         </tr>
                       );

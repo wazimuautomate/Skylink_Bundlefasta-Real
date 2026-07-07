@@ -59,9 +59,13 @@ export async function POST(req: Request) {
         raw_payload: payload,
       });
 
-      // Trigger settlement rules calculation
+      // Trigger settlement split rules (dispatches B2B for matching active rules)
       if (txnRecord && txnRecord.id) {
-        await triggerSettlementRule(txnRecord.id, txnRecord.account_reference, txnRecord.amount);
+        await triggerSettlementRule(txnRecord.id, txnRecord.account_reference, txnRecord.amount, {
+          direction: 'IN',
+          sourceSystem: txnRecord.source_system,
+          module: txnRecord.module,
+        });
       }
 
       // Trigger SMS alerts in background (side-effect)

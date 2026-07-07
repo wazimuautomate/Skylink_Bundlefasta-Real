@@ -3,6 +3,7 @@ import { createAdminClient } from '../supabase/server';
 import { resolveSourceId } from '../repositories/transactions';
 import { logSystemAudit } from '../repositories/audit';
 import { triggerNotificationFlow } from '../notifications/send-transaction-alert';
+import { triggerSettlementRule } from '../repositories/b2b';
 
 export interface WebhookReconciliationParams {
   source_system: 'bingwaone' | 'bingwazone' | 'pesatrix';
@@ -190,7 +191,28 @@ export async function reconcileWebhookTransaction(
       });
     }
 
-    // 6. Asynchronously trigger the alert notifications flow
+    // 6. Run settlement split rules for incoming money (e.g. a Pesatrix activation
+    //    triggering a fixed B2B transfer to the admin's till). Awaited so it runs to
+    //    completion in the serverless request, but guarded so a settlement failure
+    //    never affects the webhook acknowledgement.
+    if (rpcResult.transaction_id && params.tx_direction === 'IN') {
+      try {
+        await triggerSettlementRule(
+          rpcResult.transaction_id,
+          params.external_reference_id || params.receipt || null,
+          params.amount,
+          {
+            direction: 'IN',
+            sourceSystem: params.source_system,
+            module: params.module,
+          }
+        );
+      } catch (settleErr) {
+        console.error('[Reconciliation] Settlement rule engine failed:', settleErr);
+      }
+    }
+
+    // 7. Asynchronously trigger the alert notifications flow
     if (rpcResult.transaction_id) {
       triggerNotificationFlow({
         transaction_id: rpcResult.transaction_id,

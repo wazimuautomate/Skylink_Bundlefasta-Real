@@ -20,8 +20,10 @@ import {
   getB2bRequests,
   getSettlementRules,
   createSettlementRule,
+  updateSettlementRule,
   deleteSettlementRule,
   getSettlementQueue,
+  ensureDefaultSettlementRules,
 } from '@/lib/repositories/b2b';
 
 // Helper to check user auth
@@ -572,6 +574,8 @@ export async function getB2bRequestsAction(filters: { status?: string; destinati
 
 export async function getSettlementRulesAction() {
   await checkAuth();
+  // Make sure the default (editable) Pesatrix automation exists before listing.
+  await ensureDefaultSettlementRules();
   return await getSettlementRules();
 }
 
@@ -590,6 +594,24 @@ export async function createSettlementRuleAction(rule: {
     source: rule.source_reference,
     type: rule.rule_type,
   });
+  return res;
+}
+
+export async function updateSettlementRuleAction(
+  id: string,
+  updates: {
+    source_reference?: string;
+    rule_type?: string;
+    percentage?: number | null;
+    fixed_amount?: number | null;
+    destination_shortcode?: string;
+    destination_type?: string;
+    active?: boolean;
+  }
+) {
+  await checkAuth();
+  const res = await updateSettlementRule(id, updates);
+  await logAudit('SETTLEMENT_RULE_UPDATED', { ruleId: id, updates });
   return res;
 }
 
