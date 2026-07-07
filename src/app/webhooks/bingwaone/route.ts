@@ -168,7 +168,11 @@ export async function POST(req: Request) {
 
   // 7. Validate real payload structure
   const eventType = payload.event;
-  if (eventType !== 'payment.completed' && eventType !== 'wallet.withdrawal.completed') {
+  if (
+    eventType !== 'payment.completed' &&
+    eventType !== 'wallet.withdrawal.completed' &&
+    eventType !== 'bonga.payout.completed'
+  ) {
     return NextResponse.json(
       { success: false, error: 'Unsupported event type' },
       { status: 400 }
@@ -206,6 +210,13 @@ export async function POST(req: Request) {
     );
   }
 
+  if (headerCategory === 'bonga-payout' && eventType !== 'bonga.payout.completed') {
+    return NextResponse.json(
+      { success: false, error: 'Header category and payload event type mismatch' },
+      { status: 400 }
+    );
+  }
+
   // Event ID validation
   if (headerCategory === 'payment') {
     const payment = payload.payment;
@@ -221,7 +232,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-  } else {
+  } else if (headerCategory === 'wallet-withdrawal') {
     const withdrawal = payload.withdrawal;
     if (!withdrawal || !withdrawal.id || !withdrawal.amount || withdrawal.amount <= 0) {
       return NextResponse.json(
@@ -232,6 +243,16 @@ export async function POST(req: Request) {
     if (withdrawal.id !== headerId) {
       return NextResponse.json(
         { success: false, error: 'Header ID and withdrawal ID mismatch' },
+        { status: 400 }
+      );
+    }
+  } else {
+    // bonga-payout: the transfer object has no id of its own (the payout id is in
+    // the event header), so there is nothing to cross-check beyond the amount.
+    const transfer = payload.transfer;
+    if (!transfer || !transfer.amount || transfer.amount <= 0) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid transfer details' },
         { status: 400 }
       );
     }
@@ -318,6 +339,17 @@ export async function POST(req: Request) {
     let isReconciled = false;
     let isConflict = false;
 
+    // Notification / audit context, populated per event branch below so the
+    // downstream audit + notification code does not have to re-derive it from a
+    // shape that differs across payment/withdrawal/transfer payloads.
+    let notifyDirection: 'IN' | 'OUT' = 'IN';
+    let notifyType = 'subscription';
+    let notifyAmount = 0;
+    let notifyAccountRef = 'Subscription';
+    let notifyPhone: string | null = null;
+    let notifyModule = 'mini_site';
+    let notifyReceipt: string | null = null;
+
     if (eventType === 'payment.completed') {
       const payment = payload.payment;
       // Normalize phones
@@ -331,6 +363,14 @@ export async function POST(req: Request) {
       }
 
       const receipt = payment.receipt ? String(payment.receipt).trim().toUpperCase() : null;
+
+      notifyDirection = 'IN';
+      notifyType = payment.type || 'subscription';
+      notifyAmount = Number(payment.amount);
+      notifyAccountRef = payment.account_reference || 'Subscription';
+      notifyPhone = normalizedPayerPhone || normalizedRecipientPhone;
+      notifyModule = payment.module || 'mini_site';
+      notifyReceipt = receipt;
 
       // Try to match an existing Safaricom transaction
       let matchedTx: any = null;
@@ -474,15 +514,18 @@ export async function POST(req: Request) {
           })
           .eq('id', dbEvent.id);
       }
-    } else {
+    } else if (eventType === 'wallet.withdrawal.completed') {
       // wallet.withdrawal.completed
       const withdrawal = payload.withdrawal;
       let normalizedPhone = null;
-      if (withdrawal.destination) {
-        normalizedPhone = normalizeKenyanPhone(withdrawal.destination);
+      // Sender field is destination_phone; keep `destination` as a legacy fallback.
+      const destinationPhone = withdrawal.destination_phone || withdrawal.destination;
+      if (destinationPhone) {
+        normalizedPhone = normalizeKenyanPhone(destinationPhone);
       }
 
-      const receipt = withdrawal.provider_reference || withdrawal.transaction_id || null;
+      // conversation_id is the only provider reference on wallet withdrawals.
+      const receipt = withdrawal.provider_reference || withdrawal.transaction_id || withdrawal.conversation_id || null;
 
       // Try to match an existing Safaricom transaction (outgoing payout)
       let matchedTx: any = null;
@@ -608,6 +651,155 @@ export async function POST(req: Request) {
           })
           .eq('id', dbEvent.id);
       }
+
+      notifyDirection = 'OUT';
+      notifyType = 'wallet_withdrawal';
+      notifyAmount = Number(withdrawal.amount);
+      notifyAccountRef = 'Wallet Withdrawal';
+      notifyPhone = normalizedPhone;
+      notifyModule = 'wallet';
+      notifyReceipt = receipt;
+    } else {
+      // bonga.payout.completed — outgoing Bonga-points sell payout to an agent.
+      const transfer = payload.transfer;
+      let normalizedPhone = null;
+      if (transfer.destination_phone) {
+        normalizedPhone = normalizeKenyanPhone(transfer.destination_phone);
+      }
+
+      // The transfer object carries no id of its own; the payout id is in the
+      // event header, and conversation_id is the only provider reference.
+      const receipt = transfer.conversation_id || null;
+
+      // Try to match an existing Safaricom transaction (outgoing payout)
+      let matchedTx: any = null;
+      if (receipt) {
+        const { data } = await supabase
+          .from('transactions')
+          .select('*')
+          .or(`receipt.eq.${receipt},mpesa_receipt.eq.${receipt}`)
+          .eq('direction', 'OUT')
+          .eq('amount', Number(transfer.amount))
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        matchedTx = data;
+      }
+
+      if (matchedTx) {
+        isReconciled = true;
+        if (matchedTx.source_system && matchedTx.source_system !== 'unknown' && matchedTx.source_system !== 'bingwaone' && matchedTx.source_system !== 'bingwazone') {
+          isConflict = true;
+          await supabase
+            .from('transactions')
+            .update({
+              reconciliation_status: 'conflict',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', matchedTx.id);
+
+          await supabase
+            .from('webhook_events')
+            .update({
+              processing_status: 'reconciliation_conflict',
+              reconciliation_status: 'conflict',
+              transaction_id: matchedTx.id,
+              processed_at: new Date().toISOString()
+            })
+            .eq('id', dbEvent.id);
+        } else {
+          await supabase
+            .from('transactions')
+            .update({
+              source_system: 'bingwaone',
+              payment_type: matchedTx.payment_type || 'bonga_payout',
+              product_stream: matchedTx.product_stream || 'bonga',
+              module: matchedTx.module || 'bonga',
+              service_source: matchedTx.service_source || transfer.service_source || 'bonga_sell',
+              recipient_phone: matchedTx.recipient_phone || normalizedPhone,
+              receipt: matchedTx.receipt || receipt,
+              external_reference_id: matchedTx.external_reference_id || headerId,
+              external_agent_id: matchedTx.external_agent_id || payload.agent?.id || null,
+              agent_name: matchedTx.agent_name || payload.agent?.name || null,
+              agent_business_name: matchedTx.agent_business_name || payload.agent?.business_name || null,
+              agent_username: matchedTx.agent_username || payload.agent?.username || null,
+              occurred_at: matchedTx.occurred_at || payload.occurred_at || null,
+              completed_at: matchedTx.completed_at || payload.occurred_at || null,
+              raw_payload: { ...(matchedTx.raw_payload || {}), ...transfer.metadata },
+              reconciliation_status: 'matched',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', matchedTx.id);
+
+          await supabase
+            .from('webhook_events')
+            .update({
+              processing_status: 'processed',
+              reconciliation_status: 'matched',
+              transaction_id: matchedTx.id,
+              processed_at: new Date().toISOString()
+            })
+            .eq('id', dbEvent.id);
+        }
+        txId = matchedTx.id;
+      } else {
+        const { data: newTx, error: txErr } = await supabase
+          .from('transactions')
+          .insert({
+            direction: 'OUT',
+            transaction_type: 'bonga_payout',
+            amount: Number(transfer.amount),
+            status: 'SUCCESS',
+            mpesa_receipt: receipt,
+            receipt: receipt,
+            source_system: 'bingwaone',
+            provider: 'mpesa',
+            origin: 'bingwaone_webhook',
+            payment_type: 'bonga_payout',
+            product_stream: 'bonga',
+            module: 'bonga',
+            service_source: transfer.service_source || 'bonga_sell',
+            recipient_phone: normalizedPhone,
+            external_reference_id: headerId,
+            external_agent_id: payload.agent?.id || null,
+            agent_name: payload.agent?.name || null,
+            agent_business_name: payload.agent?.business_name || null,
+            agent_username: payload.agent?.username || null,
+            occurred_at: payload.occurred_at || null,
+            completed_at: payload.occurred_at || null,
+            raw_payload: transfer.metadata || {},
+            reconciliation_status: 'app_only',
+            phone_number: normalizedPhone,
+            account_reference: 'Bonga Payout',
+            description: 'bingwaone webhook event processed',
+            currency: transfer.currency || 'KES',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+
+        if (txErr) throw txErr;
+        txId = newTx.id;
+
+        await supabase
+          .from('webhook_events')
+          .update({
+            processing_status: 'processed',
+            reconciliation_status: 'app_only',
+            transaction_id: txId,
+            processed_at: new Date().toISOString()
+          })
+          .eq('id', dbEvent.id);
+      }
+
+      notifyDirection = 'OUT';
+      notifyType = 'bonga_payout';
+      notifyAmount = Number(transfer.amount);
+      notifyAccountRef = 'Bonga Payout';
+      notifyPhone = normalizedPhone;
+      notifyModule = 'bonga';
+      notifyReceipt = receipt;
     }
 
     // 10. Write Audit log
@@ -623,13 +815,13 @@ export async function POST(req: Request) {
         await logSystemAudit('TRANSACTION_RECONCILIATION_CONFLICT', {
           transaction_id: txId,
           source_system: 'bingwaone',
-          receipt: eventType === 'payment.completed' ? payload.payment.receipt : (payload.withdrawal.provider_reference || payload.withdrawal.transaction_id)
+          receipt: notifyReceipt
         });
       } else {
         await logSystemAudit('TRANSACTION_ATTRIBUTION_UPDATED', {
           transaction_id: txId,
           source_system: 'bingwaone',
-          receipt: eventType === 'payment.completed' ? payload.payment.receipt : (payload.withdrawal.provider_reference || payload.withdrawal.transaction_id)
+          receipt: notifyReceipt
         });
       }
     } else {
@@ -642,21 +834,16 @@ export async function POST(req: Request) {
 
     // 11. Queue notification (unified template support)
     try {
-      const paymentObj = eventType === 'payment.completed' ? payload.payment : payload.withdrawal;
-      const receiptNum = eventType === 'payment.completed' 
-        ? paymentObj.receipt 
-        : (paymentObj.provider_reference || paymentObj.transaction_id);
-
       triggerNotificationFlow({
         transaction_id: txId,
         source_system: 'bingwaone', // Maintain unified SMS template compatibility
-        direction: eventType === 'payment.completed' ? 'IN' : 'OUT',
-        transaction_type: eventType === 'payment.completed' ? (paymentObj.type || 'subscription') : 'wallet_withdrawal',
-        amount: Number(paymentObj.amount),
-        account_reference: eventType === 'payment.completed' ? (paymentObj.account_reference || 'Subscription') : 'Wallet Withdrawal',
-        phone_number: eventType === 'payment.completed' ? (paymentObj.payer_phone || paymentObj.recipient_phone) : paymentObj.destination,
-        mpesa_receipt: receiptNum || null,
-        module: eventType === 'payment.completed' ? (paymentObj.module || 'mini_site') : 'wallet'
+        direction: notifyDirection,
+        transaction_type: notifyType,
+        amount: notifyAmount,
+        account_reference: notifyAccountRef,
+        phone_number: notifyPhone,
+        mpesa_receipt: notifyReceipt || null,
+        module: notifyModule
       }).catch(err => {
         console.error('[BingwaOne Webhook] Failed running notification flow:', err);
       });

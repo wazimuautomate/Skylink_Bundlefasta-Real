@@ -130,9 +130,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Identifier fields must be non-empty strings
+    // reference_id and user_id are internal Pesatrix ids and must be present.
+    // transaction_id is the M-Pesa receipt (activation) or B2C id (withdrawal) and
+    // may legitimately be an empty string when the provider did not return one, so
+    // it only has to be a string here.
     if (
-      typeof transaction_id !== 'string' || transaction_id.trim() === '' ||
+      typeof transaction_id !== 'string' ||
       typeof reference_id !== 'string' || reference_id.trim() === '' ||
       typeof user_id !== 'string' || user_id.trim() === ''
     ) {
@@ -141,6 +144,9 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    // Store the provider reference only when present; never persist an empty string.
+    const normalizedReceipt = transaction_id.trim() === '' ? null : transaction_id.trim();
 
     // Phone number must be normalized
     if (typeof phone !== 'string' || phone.trim() === '') {
@@ -168,8 +174,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Generate deterministic event key: pesatrix:<event>:<transaction_id>
-    const eventKey = `pesatrix:${event}:${transaction_id}`;
+    // Generate deterministic event key: pesatrix:<event>:<reference_id>.
+    // reference_id is the stable internal id (activation_payments.id / withdrawal
+    // request id). transaction_id may be empty and several parallel B2C-result
+    // routes can fire for the same withdrawal, so we dedupe on reference_id per the
+    // Pesatrix sender contract.
+    const eventKey = `pesatrix:${event}:${reference_id}`;
 
     // Call reconciliation database driver
     const result = await reconcileWebhookTransaction({
@@ -189,7 +199,7 @@ export async function POST(req: Request) {
       amount: Number(amount),
       payer_phone: event === 'activation' ? normalizedPhone : null,
       recipient_phone: event === 'withdrawal' ? normalizedPhone : null,
-      receipt: transaction_id,
+      receipt: normalizedReceipt,
       external_reference_id: reference_id,
       external_user_id: user_id,
       completed_at: timestamp,

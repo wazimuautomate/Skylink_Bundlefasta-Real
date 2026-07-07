@@ -382,6 +382,102 @@ test('Route Handler - Accept and Process Wallet Withdrawal Webhook', async () =>
   assert.strictEqual(dataDuplicate.status, 'duplicate');
 });
 
+test('Route Handler - Wallet Withdrawal using real sender fields (destination_phone + conversation_id)', async () => {
+  // BingwaOne actually sends destination_phone (not destination) and only
+  // conversation_id as the provider reference (no provider_reference/transaction_id).
+  const uniqueWithdrawalId = crypto.randomUUID();
+  const uniqueEventKey = `wallet-withdrawal:${uniqueWithdrawalId}:completed`;
+
+  const body = JSON.stringify({
+    schema_version: 1,
+    event: 'wallet.withdrawal.completed',
+    source_system: 'bingwazone',
+    occurred_at: new Date().toISOString(),
+    withdrawal: {
+      id: uniqueWithdrawalId,
+      amount: 750,
+      currency: 'KES',
+      destination_phone: '0712345678',
+      conversation_id: 'AG_' + Math.floor(1000000 + Math.random() * 9000000),
+      service_source: 'agent_wallet'
+    },
+    agent: { id: crypto.randomUUID(), name: 'Agent', business_name: 'Shop', username: 'shop' }
+  });
+
+  const signature = 'sha256=' + crypto.createHmac('sha256', 'secret123').update(body).digest('hex');
+
+  const req = new Request('http://localhost/webhooks/bingwaone', {
+    method: 'POST',
+    headers: {
+      'X-BingwaZone-Event': uniqueEventKey,
+      'X-BingwaZone-Signature': signature
+    },
+    body
+  });
+
+  const res = await POST(req);
+  assert.strictEqual(res.status, 200);
+  const data = await res.json();
+  assert.strictEqual(data.success, true);
+  assert.strictEqual(data.status, 'processed');
+  assert.strictEqual(data.event_key, uniqueEventKey);
+});
+
+test('Route Handler - Accept and Process Bonga Payout Webhook', async () => {
+  const uniquePaymentId = crypto.randomUUID();
+  const uniqueEventKey = `bonga-payout:${uniquePaymentId}:completed`;
+
+  const body = JSON.stringify({
+    schema_version: 1,
+    event: 'bonga.payout.completed',
+    source_system: 'bingwazone',
+    occurred_at: new Date().toISOString(),
+    transfer: {
+      amount: 250,
+      currency: 'KES',
+      destination_phone: '0712345678',
+      conversation_id: 'BG_' + Math.floor(1000000 + Math.random() * 9000000),
+      service_source: 'bonga_sell',
+      metadata: { bonga_tag: 'test-run' }
+    },
+    agent: { id: crypto.randomUUID(), name: 'Agent', business_name: 'Shop', username: 'shop' }
+  });
+
+  const signature = 'sha256=' + crypto.createHmac('sha256', 'secret123').update(body).digest('hex');
+
+  const req = new Request('http://localhost/webhooks/bingwaone', {
+    method: 'POST',
+    headers: {
+      'X-BingwaZone-Event': uniqueEventKey,
+      'X-BingwaZone-Signature': signature
+    },
+    body
+  });
+
+  const res = await POST(req);
+  assert.strictEqual(res.status, 200);
+  const data = await res.json();
+  assert.strictEqual(data.success, true);
+  assert.strictEqual(data.status, 'processed');
+  assert.strictEqual(data.event_key, uniqueEventKey);
+
+  // Re-send should be treated as a duplicate (idempotent on event_key)
+  const reqDuplicate = new Request('http://localhost/webhooks/bingwaone', {
+    method: 'POST',
+    headers: {
+      'X-BingwaZone-Event': uniqueEventKey,
+      'X-BingwaZone-Signature': signature
+    },
+    body
+  });
+
+  const resDuplicate = await POST(reqDuplicate);
+  assert.strictEqual(resDuplicate.status, 200);
+  const dataDuplicate = await resDuplicate.json();
+  assert.strictEqual(dataDuplicate.success, true);
+  assert.strictEqual(dataDuplicate.status, 'duplicate');
+});
+
 // ==========================================
 // PESATRIX WEBHOOK RECEIVER ROUTE TESTS
 // ==========================================
@@ -557,6 +653,8 @@ test('Pesatrix Route Handler - Ingestion and Duplicate Handling', async () => {
     process.env.PAYBILL_DASHBOARD_WEBHOOK_SECRET = testSecret;
 
     const txId = 'TX_TEST_' + Math.floor(100000 + Math.random() * 900000);
+    // reference_id is the idempotency key, so it must be unique per run.
+    const refId = 'REF_TEST_' + Math.floor(100000 + Math.random() * 900000);
     const body = JSON.stringify({
       event: 'activation',
       transaction_id: txId,
@@ -564,7 +662,7 @@ test('Pesatrix Route Handler - Ingestion and Duplicate Handling', async () => {
       phone: '254712345678',
       platform: 'pesatrix',
       timestamp: new Date().toISOString(),
-      reference_id: 'REF_TEST_123',
+      reference_id: refId,
       user_id: 'usr_test_abcd'
     });
 
@@ -585,7 +683,7 @@ test('Pesatrix Route Handler - Ingestion and Duplicate Handling', async () => {
     assert.strictEqual(data.success, true);
     assert.strictEqual(data.status, 'processed');
     assert.strictEqual(data.event, 'activation');
-    assert.strictEqual(data.event_key, `pesatrix:activation:${txId}`);
+    assert.strictEqual(data.event_key, `pesatrix:activation:${refId}`);
 
     // Re-send to verify duplicate handling
     const reqDuplicate = new Request('http://localhost/api/webhooks/pesatrix', {
@@ -602,7 +700,7 @@ test('Pesatrix Route Handler - Ingestion and Duplicate Handling', async () => {
     const dataDuplicate = await resDuplicate.json();
     assert.strictEqual(dataDuplicate.success, true);
     assert.strictEqual(dataDuplicate.status, 'duplicate');
-    assert.strictEqual(dataDuplicate.event_key, `pesatrix:activation:${txId}`);
+    assert.strictEqual(dataDuplicate.event_key, `pesatrix:activation:${refId}`);
 
   } finally {
     process.env.PESATRIX_WEBHOOK_SECRET = originalSecret;

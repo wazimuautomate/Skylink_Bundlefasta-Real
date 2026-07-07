@@ -66,6 +66,10 @@ export async function POST(req: Request) {
       return new NextResponse('Header category and payload event type mismatch', { status: 400 });
     }
 
+    if (headerCategory === 'bonga-payout' && eventType !== 'bonga.payout.completed') {
+      return new NextResponse('Header category and payload event type mismatch', { status: 400 });
+    }
+
     // 3. Process events
     if (eventType === 'payment.completed') {
       const payment = payload.payment;
@@ -143,17 +147,21 @@ export async function POST(req: Request) {
         return new NextResponse('Header ID and withdrawal ID mismatch', { status: 400 });
       }
 
-      // Normalize phone
+      // Normalize phone. The sender field is destination_phone; keep the legacy
+      // `destination` as a fallback for older/other producers.
+      const destinationPhone = withdrawal.destination_phone || withdrawal.destination;
       let normalizedPhone = null;
       try {
-        if (withdrawal.destination) {
-          normalizedPhone = normalizeKenyanPhone(withdrawal.destination);
+        if (destinationPhone) {
+          normalizedPhone = normalizeKenyanPhone(destinationPhone);
         }
       } catch (phoneErr: any) {
         return new NextResponse(`Phone normalization failed: ${phoneErr.message}`, { status: 400 });
       }
 
-      const receipt = withdrawal.provider_reference || withdrawal.transaction_id || null;
+      // BingwaOne wallet withdrawals carry the M-Pesa B2C conversation_id as their
+      // only provider reference; fall back to provider_reference/transaction_id.
+      const receipt = withdrawal.provider_reference || withdrawal.transaction_id || withdrawal.conversation_id || null;
 
       const result = await reconcileWebhookTransaction({
         source_system: 'bingwaone',
@@ -179,6 +187,63 @@ export async function POST(req: Request) {
         external_agent_id: payload.agent?.id || null,
         completed_at: withdrawal.completed_at || null,
         metadata: withdrawal.metadata || {}
+      });
+
+      if (result.status === 'idempotency_conflict') {
+        return new NextResponse(result.error, { status: 409 });
+      }
+      if (result.status === 'error') {
+        return new NextResponse(result.error, { status: 500 });
+      }
+
+      return NextResponse.json({
+        received: true,
+        duplicate: result.duplicate
+      });
+
+    } else if (eventType === 'bonga.payout.completed') {
+      // Outgoing Bonga-points sell payout to an agent. The transfer object has no
+      // id of its own — the payout id lives in the event header
+      // (bonga-payout:<paymentId>:completed).
+      const transfer = payload.transfer;
+      if (!transfer || !transfer.amount || transfer.amount <= 0) {
+        return new NextResponse('Invalid transfer object details', { status: 400 });
+      }
+
+      let normalizedPhone = null;
+      try {
+        if (transfer.destination_phone) {
+          normalizedPhone = normalizeKenyanPhone(transfer.destination_phone);
+        }
+      } catch (phoneErr: any) {
+        return new NextResponse(`Phone normalization failed: ${phoneErr.message}`, { status: 400 });
+      }
+
+      const receipt = transfer.conversation_id || null;
+
+      const result = await reconcileWebhookTransaction({
+        source_system: 'bingwaone',
+        event_key: eventHeader,
+        event_type: eventType,
+        schema_version: schemaVersion || null,
+        raw_payload_string: rawBody,
+        raw_payload: payload,
+        occurred_at: payload.occurred_at || null,
+        tx_direction: 'OUT', // bonga payout is an outgoing transfer (OUT)
+        tx_type: 'bonga_payout',
+        payment_type: 'bonga_payout',
+        product_stream: 'bonga',
+        module: 'bonga',
+        service_source: transfer.service_source || 'bonga_sell',
+        amount: Number(transfer.amount),
+        recipient_phone: normalizedPhone,
+        receipt,
+        external_reference_id: headerId,
+        agent_name: payload.agent?.name || null,
+        agent_business_name: payload.agent?.business_name || null,
+        agent_username: payload.agent?.username || null,
+        completed_at: payload.occurred_at || null,
+        metadata: transfer.metadata || {}
       });
 
       if (result.status === 'idempotency_conflict') {
